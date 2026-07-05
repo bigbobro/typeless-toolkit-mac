@@ -9,11 +9,11 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { execSync, spawn } = require('child_process');
+const { execFileSync } = require('child_process');
 
 const C = require('./lib/common');
 const {
-  config, ROOT, TYPELESS_EXE, CDP_PORT, ASAR_PATH,
+  config, ASAR_PATH, MAC_INFO_PLIST,
   readAccounts, writeAccounts,
   saveSnapshot, restoreSnapshot, hasSnapshot,
   killTypeless, launchTypeless, resetDevice,
@@ -21,6 +21,8 @@ const {
   curlApi, ensureApp, captureTokenCDP,
   liveStatus, syncAccount,
   paywallStatus, patchPaywall,
+  accountMetaFromUserInfo,
+  termKey,
   log, sleep,
 } = C;
 
@@ -69,12 +71,21 @@ const server = http.createServer(async (req, res) => {
     // 保存账号
     if (m === 'POST' && p === '/api/accounts') {
       const b = await readBody(req);
+      let meta = accountMetaFromUserInfo(b.user_info, b.user_id);
+      if ((!b.email || !b.nickname || !b.role) && b.token) {
+        try {
+          const ui = await curlApi('GET', '/user/get_user_info', b.token);
+          meta = accountMetaFromUserInfo(ui.data || b.user_info, b.user_id);
+        } catch (e) {}
+      }
       const accs = readAccounts();
       const idx = accs.findIndex(x => x.user_id === b.user_id);
       const rec = {
         user_id: b.user_id,
-        nickname: b.nickname || b.email || (b.user_id || '').slice(0, 8),
-        email: b.email, role: b.role, token: b.token, captured_at: b.captured_at,
+        nickname: b.nickname || b.email || meta.nickname || (b.user_id || '').slice(0, 8),
+        email: b.email || meta.email || '',
+        role: b.role || meta.role || '',
+        token: b.token, captured_at: b.captured_at,
         added_at: idx >= 0 ? accs[idx].added_at : new Date().toISOString(),
       };
       if (idx >= 0) accs[idx] = rec; else accs.push(rec);
@@ -106,7 +117,7 @@ const server = http.createServer(async (req, res) => {
     if (m === 'GET' && p === '/api/paywall-status') {
       return send(res, 200, { status: 'OK', data: paywallStatus() });
     }
-    // 解除升级弹窗(打 asar+exe 两层补丁,失败自动从备份还原)
+    // 解除升级弹窗(打 app.asar + Info.plist 完整性补丁,失败自动从备份还原)
     if (m === 'POST' && p === '/api/patch-paywall') {
       killTypeless(); await sleep(1500);
       try {
@@ -116,7 +127,8 @@ const server = http.createServer(async (req, res) => {
       } catch (e) {
         // 失败则从备份还原,避免半改导致闪退
         try { if (fs.existsSync(ASAR_PATH + '.bak')) fs.copyFileSync(ASAR_PATH + '.bak', ASAR_PATH); } catch (_) {}
-        try { if (TYPELESS_EXE && fs.existsSync(TYPELESS_EXE + '.bak')) fs.copyFileSync(TYPELESS_EXE + '.bak', TYPELESS_EXE); } catch (_) {}
+        try { if (MAC_INFO_PLIST && fs.existsSync(MAC_INFO_PLIST + '.bak')) fs.copyFileSync(MAC_INFO_PLIST + '.bak', MAC_INFO_PLIST); } catch (_) {}
+        try { if (C.MAC_APP_PATH) execFileSync('codesign', ['--force', '--deep', '--sign', '-', C.MAC_APP_PATH], { stdio: 'ignore' }); } catch (_) {}
         return send(res, 500, { status: 'FAIL', msg: '打补丁失败:' + e.message + '(已从备份还原)' });
       }
     }
@@ -127,8 +139,8 @@ const server = http.createServer(async (req, res) => {
       if (!acc) return send(res, 404, { status: 'FAIL', msg: '账号不存在' });
       const master = readMaster();
       const dl = await curlApi('GET', '/user/dictionary/list?size=500', acc.token);
-      const have = new Set((dl.data?.words || []).map(w => w.term));
-      const missing = master.filter(w => !have.has(w));
+      const have = new Set((dl.data?.words || []).map(w => termKey(w.term)));
+      const missing = master.filter(w => !have.has(termKey(w)));
       let imported = 0;
       if (missing.length) {
         const r = await curlApi('POST', '/user/dictionary/bulk-import', acc.token, { content: missing.join('\n') });
@@ -148,8 +160,8 @@ const server = http.createServer(async (req, res) => {
       const sl = await curlApi('GET', '/user/dictionary/list?size=500', src.token);
       const srcWords = (sl.data?.words || []).map(w => w.term).filter(Boolean);
       const dl = await curlApi('GET', '/user/dictionary/list?size=500', dst.token);
-      const have = new Set((dl.data?.words || []).map(w => w.term));
-      const missing = srcWords.filter(w => !have.has(w));
+      const have = new Set((dl.data?.words || []).map(w => termKey(w.term)));
+      const missing = srcWords.filter(w => !have.has(termKey(w)));
       let imported = 0;
       if (missing.length) {
         const r = await curlApi('POST', '/user/dictionary/bulk-import', dst.token, { content: missing.join('\n') });
@@ -158,7 +170,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { status: 'OK', data: { src_count: srcWords.length, imported, already: srcWords.length - missing.length } });
     }
     // 删除账号
-    if (m === 'DELETE' && p.startsWith('/api/accounts/')) {
+    if (m === 'DELETE' && /^\/api\/accounts\/[^/]+$/.test(p)) {
       const id = decodeURIComponent(p.split('/').pop());
       let accs = readAccounts();
       accs = accs.filter(x => x.user_id !== id);
@@ -196,7 +208,7 @@ const server = http.createServer(async (req, res) => {
       const id = decodeURIComponent(p.split('/')[3]);
       const acc = readAccounts().find(x => x.user_id === id);
       const b = await readBody(req);
-      const r = await curlApi('POST', '/user/dictionary/bulk-import', acc.token, { content: b.term });
+      const r = await curlApi('POST', '/user/dictionary/add', acc.token, { term: b.term });
       return send(res, 200, { status: 'OK', data: r.data });
     }
     // 删账号单个词(按 term)
@@ -208,6 +220,17 @@ const server = http.createServer(async (req, res) => {
       const w = (dl.data?.words || []).find(x => x.term === term);
       if (!w) return send(res, 404, { status: 'FAIL', msg: '词条不存在' });
       const r = await curlApi('POST', '/user/dictionary/delete', acc.token, { user_dictionary_id: w.user_dictionary_id });
+      let stillExists = true;
+      let absentHits = 0;
+      for (let i = 0; i < 10; i++) {
+        await sleep(500);
+        const check = await curlApi('GET', '/user/dictionary/list?size=500', acc.token);
+        if (!Array.isArray(check.data?.words)) continue;
+        stillExists = check.data.words.some(x => x.term === term);
+        absentHits = stillExists ? 0 : absentHits + 1;
+        if (absentHits >= 2) break;
+      }
+      if (stillExists) return send(res, 500, { status: 'FAIL', msg: '删除请求已发送,但词条仍存在', data: r.data });
       return send(res, 200, { status: 'OK', data: r.data });
     }
     // 主 CSV
@@ -225,4 +248,11 @@ const server = http.createServer(async (req, res) => {
   } catch (e) { send(res, 500, { status: 'FAIL', msg: e.message }); }
 });
 
+server.on('error', (e) => {
+  if (e.code === 'EADDRINUSE') {
+    console.error(`[mgr] 端口 ${PORT} 已被占用。如果管理器已经打开,直接访问 http://127.0.0.1:${PORT}`);
+    process.exit(1);
+  }
+  throw e;
+});
 server.listen(PORT, '127.0.0.1', () => { log('[mgr] 管理器运行于 http://127.0.0.1:' + PORT); });

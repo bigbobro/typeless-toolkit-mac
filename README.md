@@ -1,145 +1,245 @@
-# Typeless 工具集(公开版)
+# Typeless Toolkit for macOS
 
-Typeless 桌面端的多账号管理 + 个人词库跨账号同步 + 去升级弹窗补丁工具集。
-纯 Node.js + 单页前端,无外部依赖,Windows 平台。
+Typeless 桌面端的 macOS 本地管理工具。主入口是一个本地网页管理器,用于多账号保存、登录态切换、个人词库同步、设备 ID 重置,以及去升级/会员弹窗补丁。
 
-## 这是什么
+这是一个纯 Node.js 项目,不需要 `npm install`。默认只面向 macOS 版 Typeless。
 
-[Typeless](https://typeless.com/) 是一款语音听写桌面应用(Electron)。本工具集围绕它的几个
-实际使用痛点提供本地辅助:
+## 先说流程
 
-- **多账号管理**:一台机器上切换多个 Typeless 账号,各自保留登录态快照,一键切换。
-- **词库跨账号同步**:把多个账号的个人词库(含系统自动学习的 auto 词)合并成一份主清单,
-  再回灌到每个账号,换号不丢词。
-- **解除设备限制**:重置设备 ID,准备注册新账号。
-- **去升级/会员弹窗**:对 Electron 的 asar 两层完整性校验打等长字节补丁,关掉付费墙弹窗。
+日常使用只需要打开管理器。CLI 是备用入口,不是必需流程。
 
-## 原理简述
+第一次使用:
 
-- **个性化 = 词库可同步 + 风格不可导出**:Typeless 的「个性化」主要来自个人词库(手动加的词 +
-  系统自动学习的词),这些都能通过官方 API 导出/导入;而说话风格模型不可导出,跨账号无法迁移。
-- **多账号切换 = 登录态快照**:Typeless 把登录凭证存在 `%APPDATA%\Typeless.exe\` 下的几个
-  JSON 文件里。把这些文件按账号 snapshot 存好,切换账号时还原对应快照并重启即可。
-- **设备限制 = Credential Manager 设备 ID**:Typeless 用 Windows Credential Manager 的
-  `Typeless.deviceIdentifier` 凭据 + `%APPDATA%\Typeless\Cache\device.cache` 绑定设备。
-  删掉这两处(外加清登录态)即可重置成「新设备」。
-- **去弹窗 = 两层 asar 完整性补丁**:Electron 有两道 asar 完整性校验——asar 头里每个文件的
-  per-file SHA256,以及 exe 内嵌的整头 SHA256。改 asar 内容必须同时更新这两层,否则启动闪退。
-  本工具用等长字节替换(`gn(x)` → `(0,x)`)把付费墙渲染函数调用变成无操作表达式。
+1. 启动管理器。
+2. 在管理器里点「启动 Typeless」,让 Typeless 以调试端口运行。
+3. 在 Typeless 里登录一个账号。
+4. 回到管理器,点「添加当前账号」。
+5. 点「全部同步」,把这个账号的个人词库合并进本地主词库。
 
-## 安装要求
+以后新增账号:
 
-- **Node.js 18+**(用了原生 `WebSocket`、`fetch`)
-- **Windows**(脚本用了 `taskkill`、`cmdkey`、`tasklist`)
-- **curl**(Windows 10 1803+ 自带;用于调 Typeless API,自动走系统代理)
-- **已安装 Typeless 桌面端**
-- **无需管理员权限**:Typeless 装在用户目录(`%LOCALAPPDATA%`),app.asar/exe/设备凭据都在当前用户权限内,普通权限即可运行(改 exe 会让 Authenticode 签名失效,但本机仍可运行)
+1. 管理器不用关,保持开着即可。
+2. 在 Typeless 里退出/切换到新账号。
+3. 如果 Typeless 因设备限制不让继续登录或注册,再使用管理器里的「解除设备限制」。
+4. 登录成功后,回到管理器点「添加当前账号」。
+5. 点「全部同步」,让新账号和已有账号的词库对齐。
 
-## 快速开始
+以后切换账号:
 
-1. **配置**(可选):打开 `config.json`,若 Typeless 不在默认安装路径,填 `typeless_exe`。
-2. **启动管理器**:双击 `启动管理器.bat`(或 `node manager.js`),浏览器自动打开
-   `http://127.0.0.1:7788`。
-3. **添加账号**:在 Typeless 里登录第一个账号 → 管理器点「添加当前账号」(会自动抓 token)。
-4. **同步词库**:点「全部同步」,各账号词库自动对齐到主 CSV。
-5. **切换账号**:账号卡片点「切换到此号」(从快照还原 + 重启 Typeless)。
-6. **解除弹窗**:点「解除弹窗提示」(首次自动备份 `.bak`,失败自动还原)。
+1. 打开管理器。
+2. 在账号卡片里点「切换到此号」。
+3. 管理器会还原该账号的登录态快照,并重启 Typeless。
 
-也可以不用管理器,直接命令行跑词库同步:`同步词库.bat`(或 `node typeless-dict-sync.js`)。
+切换已保存账号不需要重置设备。设备 ID 重置只在新增账号、注册账号或重新登录时遇到 Typeless 设备限制才使用;它会清掉当前 Typeless 登录状态,不是日常切号步骤。
 
-## 功能列表
+管理器本质上是运行在本机的服务: `http://127.0.0.1:7788`。使用期间保持终端窗口开着即可;用完后可以在终端按 `Ctrl+C` 退出。
+
+## 功能状态
 
 | 功能 | 入口 | 说明 |
 | --- | --- | --- |
-| 账号管理 | 管理器 | 添加/移除/切换账号,实时显示额度、词库数、个性化进度 |
-| 词库同步 | 管理器 / CLI | 导出各账号词库到主 CSV,再把缺失词回灌(只增不删) |
-| 主词库编辑 | 管理器 | 一行一个词,作为所有账号同步的基准 |
-| 跨账号复制词库 | 管理器 | 把某账号词库整份导入另一账号 |
-| 解除设备限制 | 管理器 | 重置设备 ID,准备注册新账号 |
-| 去升级弹窗 | 管理器 | asar + exe 两层等长补丁,关掉付费墙 |
-| 带调试端口启动 | bat | `--remote-debugging-port=9222` 启动 Typeless,供 CDP 抓 token |
+| 多账号管理 | 管理器 | 保存账号 token 和登录态快照 |
+| 登录态切换 | 管理器 | 从本地快照恢复账号状态 |
+| 个人词库同步 | 管理器 | 推荐使用「全部同步」 |
+| 单词增删 | 管理器 | 对单个账号操作 |
+| 设备 ID 重置 | 管理器 | 只在设备限制时使用 |
+| 去升级/会员弹窗 | 管理器 | 修改 Typeless.app 本地文件 |
+| CDP 调试端口启动 | 管理器 / `.command` | 用于抓取当前登录账号 token |
+| 词库同步 CLI | `.command` / JS | 可选备用,日常不需要 |
 
-## 配置说明
+## 快速开始
 
-`config.json`(用户可改,默认值无隐私):
+要求:
+
+- macOS
+- Node.js 18+
+- 已安装 Typeless.app
+- 系统自带 `curl`, `security`, `codesign`, `PlistBuddy`
+
+推荐使用 `git clone`,它通常会保留 `.command` 的可执行权限。如果是从 GitHub `Download ZIP` 下载,首次运行前建议在项目目录执行:
+
+```bash
+chmod +x *.command
+xattr -dr com.apple.quarantine . 2>/dev/null || true
+```
+
+启动管理器:
+
+```bash
+./启动管理器.command
+```
+
+如果管理器已经在运行,再次执行这个脚本只会打开已有页面。
+
+或者手动启动:
+
+```bash
+node manager.js
+open http://127.0.0.1:7788
+```
+
+## 账号和数据保存在哪里
+
+本项目只在本机保存运行数据:
+
+- `accounts.json`: 保存账号信息和 token。明文文件,不要上传。
+- `profiles/`: 保存每个账号的 Typeless 登录态快照。不要上传。
+- `Typeless词库主清单.csv`: 本地主词库,由同步功能自动创建或更新。不要上传。
+- `config.local.json`: 你的本机配置覆盖文件。不要上传。
+
+这些文件已写入 `.gitignore`。
+
+## 词库同步怎么理解
+
+管理器里的同步是只增不删:
+
+1. 先从账号导出个人词库,合并进本地主词库。
+2. 再把本地主词库里该账号缺少的词导入账号。
+
+所以「全部同步」的结果是:所有已保存账号都会逐步对齐到同一份词库并集。它不会删除任何账号里的词。
+
+## 还要不要用 CLI
+
+通常不用。
+
+`同步词库.command` 和 `typeless-dict-sync.js` 只是备用入口,适合只想对当前登录账号做一次同步,或者以后做自动化脚本。管理器已经覆盖日常操作:添加账号、切换账号、全部同步、单账号同步、单词增删。
+
+CLI 用法:
+
+```bash
+./同步词库.command
+```
+
+或者:
+
+```bash
+node typeless-dict-sync.js
+```
+
+## 配置
+
+默认配置通常不用改:
 
 ```json
 {
-  "typeless_exe": "",            // 留空=自动探测 %LOCALAPPDATA%\Programs\Typeless\Typeless.exe
-  "cdp_port": 9222,              // CDP 调试端口
-  "manager_port": 7788,          // 管理器 HTTP 端口
+  "typeless_app": "",
+  "user_data_dir": "",
+  "device_cache_path": "",
+  "asar_path": "",
+  "cdp_port": 9222,
+  "manager_port": 7788,
   "api_base": "https://api.typeless.com",
   "master_csv": "Typeless词库主清单.csv",
   "paywall": {
-    "file_path": ["dist", "renderer", "static", "js", "2J71HyJ6.mjs"],
-    "replacements": [
-      ["gn(_0x1c3e62)", "(0,_0x1c3e62)"],
-      ["gn(_0x2d6844)", "(0,_0x2d6844)"]
-    ],
-    "auto_detect_file": true
+    "file_path": [],
+    "replacements": [],
+    "auto_detect_file": true,
+    "auto_detect_replacements": true
   }
 }
 ```
 
-- `typeless_exe` 留空时按优先级探测:config → 环境变量 `TYPELESS_EXE` → 默认安装路径 → 报错。
-- `paywall.file_path` 是 v1.8.0 的值(示例);`auto_detect_file=true` 时若找不到会自动遍历
-  asar 内 `.mjs` 文件找含 `paywall` 的那个。
-- `paywall.replacements` 是 minified 变量名,**无法自动推测**,版本变了需手动定位(见下)。
-- 本地私有覆盖可写在 `config.local.json`(已 `.gitignore`,不会进 git)。
+自动探测路径:
 
-## 各版本弹窗补丁适配
+- Typeless.app: `/Applications/Typeless.app`, `~/Applications/Typeless.app`
+- 用户数据: `~/Library/Application Support/Typeless`
+- device cache: `~/Library/Application Support/now.typeless.desktop/device.cache`
+- app.asar: `Typeless.app/Contents/Resources/app.asar`
 
-Typeless 更新后,`.mjs` 文件名和 minified 变量名(`gn`、`_0x1c3e62` 等)可能改变。
-若管理器报「未找到标记 X」,说明你的版本与 config 默认值不同,需要:
+如果你的 Typeless 不在默认路径,不要直接改仓库配置也可以。新建 `config.local.json`:
 
-1. 用 `npx asar extract` 或 7-Zip 解开 `app.asar`。
-2. 在 `dist/renderer` 下 grep `paywall`,定位渲染层 `.mjs` 文件。
-3. 用 DevTools(浏览器开 `http://127.0.0.1:9222`)在 `onImportantNotification` /
-   `onSessionInterrupt` 的 `type==='paywall'` 分支找到弹窗显示函数名。
-4. 把调用改成 `(0,原参数)`(等长 3 字符替换:`gn(` → `(0,`),填入 `config.json`。
+```json
+{
+  "typeless_app": "/Applications/Typeless.app"
+}
+```
 
-详细步骤见 [Typeless去升级弹窗补丁指南.md](Typeless去升级弹窗补丁指南.md)。
+`config.local.json` 会覆盖 `config.json`,并且不会提交到 git。
 
-## 常见问题
+## 设备 ID 重置
 
-**Q: 抓 token 失败 / 「CDP 无响应」?**
-A: Typeless 必须带 `--remote-debugging-port=9222` 启动。用本目录的
-`启动Typeless(带调试端口).bat`,或管理器的「启动 Typeless」按钮(会自动带调试端口)。
+只有遇到 Typeless 设备限制时才需要这个功能。
 
-**Q: 打补丁后 Typeless 闪退?**
-A: 日志若出现 `FATAL:asar_util.cc ... Integrity check failed`,说明两层完整性校验没同步好。
-  管理器会自动从 `.bak` 还原;手动补丁则 `copy /Y *.bak *` 还原后重试。
+管理器里的「解除设备限制」会:
 
-**Q: Typeless 自动更新后弹窗又回来了?**
-A: 自动更新会重写 `app.asar` 和 `Typeless.exe`,补丁被还原,需重打。要根治可关 Typeless 自动更新。
+1. 退出 Typeless。
+2. 删除 Keychain 中的设备标识。
+3. 删除 `device.cache`。
+4. 删除 `user-data.json`。
+5. 清理 `app-storage.json` 的 `userData` / `quotaUsage`。
+6. 删除 Cookies 和 Local Storage。
+7. 重新启动 Typeless。
 
-**Q: token 会过期吗?**
-A: Typeless 的 JWT 约 1 年有效。token 失效后管理器会显示「token失效」,重新点「添加当前账号」
-  抓一次新 token 即可。
+这个操作会登出当前账号。使用前先确认账号已经在管理器里保存过,或者你能重新登录。
 
-**Q: 支持Mac/Linux吗?**
-A: 目前仅 Windows。kill/launch 用了 `taskkill`、设备重置用了 `cmdkey`,Mac 需改用 `killall`/
-  `security`。
+macOS 设备 ID 位置参考了 `estarpro1022/typeless-reset-device` 的整理:
 
-## 免责声明
+- Keychain service: `now.typeless.desktop.deviceIdentifier`
+- Keychain account: `now.typeless.desktop.security.auth_key`
+- cache: `~/Library/Application Support/now.typeless.desktop/device.cache`
 
-**本工具集内容仅供 24 小时内的学习与技术交流,请于下载/使用后 24 小时内自行删除。**
+## 去弹窗补丁
 
-- 本项目旨在帮助理解 Electron 应用的 asar 完整性机制、CDP 远程调试、多账号登录态管理等技术原理,仅供个人学习与研究。
-- **不得用于规避 Typeless 的付费机制、违反其服务条款,或任何商业用途。** 不得将本项目用于盈利、贩卖、分发或任何形式的商业传播。
-- Typeless 软件及相关商标、著作权的全部权利归其原始权利人所有,本项目与 Typeless 官方无任何关联、赞助或认可关系。
-- 使用本工具集产生的一切后果(包括但不限于账号封禁、数据丢失、应用损坏、法律责任)由使用者自行承担,作者不承担任何责任。
-- 使用前请先阅读 Typeless 的服务条款;若你的所在地法律或 Typeless 条款禁止此类操作,请勿使用。
-- 继续使用即视为你已阅读并同意上述声明。
+管理器里的「解除弹窗提示」会修改 Typeless.app 内部文件:
 
-## 许可证
+1. 退出 Typeless。
+2. 备份 `app.asar` 和 `Info.plist`。
+3. 在 renderer bundle 中自动查找 `type === 'paywall'` 分支。
+4. 做等长替换。
+5. 更新 asar per-file SHA256。
+6. 更新 `Info.plist` 中的 `ElectronAsarIntegrity.Resources/app.asar.hash`。
+7. 对 `Typeless.app` 执行 ad-hoc codesign。
+8. 重启 Typeless。
 
-MIT,见 [LICENSE](LICENSE)。
+Typeless 自动更新后可能会重写应用文件,需要重新打补丁。
 
-## 参考项目
+恢复方式:
 
-- [estarpro1022/typeless-reset-device](https://github.com/estarpro1022/typeless-reset-device) —— 本项目的「解除设备登录限制」功能参考了该项目重置 Typeless 设备 ID 的思路(清理设备标识凭据以重新注册新账号)。
+```bash
+cp /Applications/Typeless.app/Contents/Resources/app.asar.bak /Applications/Typeless.app/Contents/Resources/app.asar
+cp /Applications/Typeless.app/Contents/Info.plist.bak /Applications/Typeless.app/Contents/Info.plist
+codesign --force --deep --sign - /Applications/Typeless.app
+```
+
+如果 Typeless 安装在别处,把路径换成你的 `typeless_app`。
+
+## 文件说明
+
+- `manager.js`: 本地 HTTP 后端。
+- `manager.html`: 管理器页面。
+- `lib/common.js`: Typeless 路径探测、CDP、API、账号快照、同步、补丁逻辑。
+- `typeless-dict-sync.js`: 可选的词库同步 CLI。
+- `启动管理器.command`: 启动管理器并打开浏览器。
+- `启动Typeless(带调试端口).command`: 以 CDP 调试端口启动 Typeless。
+- `同步词库.command`: 运行可选词库同步 CLI。
+
+## Credits
+
+这个项目来自对原工具集的 fork 和 macOS 重构:
+
+- 原工具集: [Jia131313/typeless-toolkit](https://github.com/Jia131313/typeless-toolkit)
+- macOS 设备 ID reset 参考: [estarpro1022/typeless-reset-device](https://github.com/estarpro1022/typeless-reset-device)
+
+特别感谢 `typeless-reset-device` 对 Keychain service/account、`device.cache`、Typeless 本地数据目录的整理。
 
 ## 致谢 / Thanks
 
 感谢 [LINUX DO 论坛社区](https://linux.do/) 的关注、反馈与支持。
+
+## 免责声明
+
+**本工具集内容仅供 24 小时内的学习与技术交流，请于下载/使用后 24 小时内自行删除。**
+
+> [!IMPORTANT]
+> **强烈建议并呼吁大家支持 Typeless 官方的付费充值与订阅服务**。优秀的软件离不开开发团队的持续维护与付出，本工具集仅供个人本地数据同步管理和技术原理研究，切勿规避或损害官方的正当付费机制。
+
+- 本项目旨在帮助理解 Electron 应用的 asar 完整性机制、CDP 远程调试、多账号登录态管理等技术原理，仅供个人学习与研究。
+- **不得用于规避 Typeless 的付费机制、违反其服务条款，或任何商业用途。** 不得将本项目用于盈利、贩卖、分发或任何形式的商业传播。
+- Typeless 软件及相关商标、著作权的全部权利归其原始权利人所有，本项目与 Typeless 官方无任何关联、赞助或认可关系。
+- 使用本工具集产生的一切后果（包括但不限于账号封禁、数据丢失、应用损坏、法律责任）由使用者自行承担，作者不承担任何责任。
+- 使用前请先阅读 Typeless 的服务条款；若你的所在地法律或 Typeless 条款禁止此类操作，请勿使用。
+- 继续使用即视为你已阅读并同意上述声明。
+
+## License
+
+MIT

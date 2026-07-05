@@ -298,7 +298,7 @@ async function resetDevice(){
   toast(r.msg||'已重置');
   setTimeout(()=>{ loadAccounts(); detectCurrent(); }, 7000);
 }
-// 解除升级/会员弹窗(等长字节补丁 app.asar + Typeless.exe,同步两层 asar 完整性哈希)
+// 解除升级/会员弹窗(等长字节补丁 app.asar + 应用完整性哈希)
 async function patchPaywall(){
   // 先查状态:已打过就提示,不再动文件
   let st={};
@@ -307,7 +307,7 @@ async function patchPaywall(){
     toast('已是无弹窗补丁版,无需重复操作');
     return;
   }
-  if(!confirm('解除升级弹窗?\n\n将修改 app.asar + Typeless.exe(等长字节替换 gn(x)→(0,x),并同步 per-file SHA256 与 exe 内嵌整头 SHA256 两层完整性)。\n首次会自动备份 app.asar.bak / Typeless.exe.bak。\nTypeless 会先关闭,打完自动重启。\n注意:Typeless 自动更新会还原补丁,届时需重打。')) return;
+  if(!confirm('解除升级弹窗?\n\n将修改 app.asar 与 Info.plist 完整性记录(等长字节替换 gn(x)→(0,x),并重新签名 Typeless.app)。\n首次会自动备份 app.asar.bak / Info.plist.bak。\nTypeless 会先关闭,打完自动重启。\n注意:Typeless 自动更新会还原补丁,届时需重打。')) return;
   toast('打补丁中…');
   const r=await api('/api/patch-paywall',{method:'POST'});
   if(r.status==='OK'){
@@ -362,7 +362,15 @@ async function doCapture(){
 }
 async function saveAccount(){
   const d=window._cap; if(!d) return;
-  const r=await api('/api/accounts',{method:'POST',body:JSON.stringify({user_id:d.user_id,nickname:document.getElementById('addNick').value.trim(),email:d.email,role:d.role,token:d.token,captured_at:d.captured_at})});
+  const r=await api('/api/accounts',{method:'POST',body:JSON.stringify({
+    user_id:d.user_id,
+    nickname:document.getElementById('addNick').value.trim(),
+    email:document.getElementById('addEmail').value.trim()||d.email,
+    role:d.role,
+    token:d.token,
+    captured_at:d.captured_at,
+    user_info:d.user_info
+  })});
   if(r.status!=='OK'){ toast('保存失败'); return; }
   closeModal('addMask'); toast('已保存,正在迁移主词库到此号…');
   // 自动迁移:把主词库导入新账号

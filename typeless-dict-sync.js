@@ -12,7 +12,7 @@
  *   token 每次运行重新抓取,自动适配当前登录的账号。
  *
  * 用法:
- *   1. 用 --remote-debugging-port=9222 启动 Typeless(见「启动Typeless(带调试端口).bat」)。
+ *   1. 用 --remote-debugging-port=9222 启动 Typeless(见「启动Typeless(带调试端口).command」)。
  *   2. node typeless-dict-sync.js
  *
  * 注意:脚本会重载一次主窗口以抓取 token;词库同步对账号无破坏性(只增不删)。
