@@ -13,8 +13,9 @@ const { execFileSync } = require('child_process');
 
 const C = require('./lib/common');
 const {
-  config, ASAR_PATH, MAC_INFO_PLIST,
+  config, CDP_PORT, ASAR_PATH, MAC_INFO_PLIST,
   readAccounts, writeAccounts,
+  backupRuntimeData, runtimeDataStatus, createRuntimeBackupBundle, restoreRuntimeBackupBundle,
   saveSnapshot, restoreSnapshot, hasSnapshot,
   killTypeless, launchTypeless, resetDevice,
   readMaster, writeMaster,
@@ -58,6 +59,37 @@ const server = http.createServer(async (req, res) => {
       const data = accs.map((a, i) => ({ ...a, live: live[i], has_snapshot: hasSnapshot(a.user_id) }));
       return send(res, 200, { status: 'OK', data });
     }
+    // 本地运行数据备份状态(accounts/profile/主词库)
+    if (m === 'GET' && p === '/api/backup-status') {
+      return send(res, 200, { status: 'OK', data: runtimeDataStatus() });
+    }
+    // 手动备份本地运行数据
+    if (m === 'POST' && p === '/api/backup-runtime') {
+      const backupPath = backupRuntimeData('manual');
+      return send(res, 200, {
+        status: 'OK',
+        data: { backup_path: backupPath, ...runtimeDataStatus() },
+        msg: backupPath ? '运行数据已备份' : '暂无运行数据可备份',
+      });
+    }
+    // 导出可迁移的备份包
+    if (m === 'GET' && p === '/api/backup-export') {
+      backupRuntimeData('export');
+      const bundle = createRuntimeBackupBundle();
+      const body = JSON.stringify(bundle, null, 2);
+      const filename = `typeless-toolkit-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Content-Disposition': `attachment; filename="${filename}"`,
+      });
+      return res.end(body);
+    }
+    // 从备份包恢复运行数据
+    if (m === 'POST' && p === '/api/backup-restore') {
+      const b = await readBody(req);
+      const result = restoreRuntimeBackupBundle(b.bundle || b);
+      return send(res, 200, { status: 'OK', msg: '备份已恢复', data: { ...result, ...runtimeDataStatus() } });
+    }
     // 当前登录账号探测(不保存,不重启 Typeless:autoRestart=false,端口不通就报未连接)
     if (m === 'GET' && p === '/api/current') {
       try { const c = await captureTokenCDP(null, false); return send(res, 200, { status: 'OK', data: c }); }
@@ -71,6 +103,7 @@ const server = http.createServer(async (req, res) => {
     // 保存账号
     if (m === 'POST' && p === '/api/accounts') {
       const b = await readBody(req);
+      if (!b.user_id || !b.token) return send(res, 400, { status: 'FAIL', msg: '缺少 user_id 或 token,请重新添加当前账号' });
       let meta = accountMetaFromUserInfo(b.user_info, b.user_id);
       if ((!b.email || !b.nickname || !b.role) && b.token) {
         try {
@@ -110,8 +143,9 @@ const server = http.createServer(async (req, res) => {
     }
     // 解除设备限制(重置设备 ID,准备注册新账号)
     if (m === 'POST' && p === '/api/reset-device') {
+      const dataBackup = backupRuntimeData('reset-device');
       await resetDevice();
-      return send(res, 200, { status: 'OK', msg: '设备已重置,Typeless 已以新设备 ID 启动(登录页),可注册新账号' });
+      return send(res, 200, { status: 'OK', msg: '设备已重置,Typeless 已以新设备 ID 启动(登录页),可注册新账号', manager_data_backup: dataBackup });
     }
     // 查询去弹窗补丁状态(只读)
     if (m === 'GET' && p === '/api/paywall-status') {
@@ -119,9 +153,11 @@ const server = http.createServer(async (req, res) => {
     }
     // 解除升级弹窗(打 app.asar + Info.plist 完整性补丁,失败自动从备份还原)
     if (m === 'POST' && p === '/api/patch-paywall') {
+      const dataBackup = backupRuntimeData('patch-paywall');
       killTypeless(); await sleep(1500);
       try {
         const r = patchPaywall();
+        if (dataBackup) r.manager_data_backup = dataBackup;
         launchTypeless(); // 重启使补丁生效
         return send(res, 200, { status: 'OK', data: r });
       } catch (e) {
@@ -129,7 +165,7 @@ const server = http.createServer(async (req, res) => {
         try { if (fs.existsSync(ASAR_PATH + '.bak')) fs.copyFileSync(ASAR_PATH + '.bak', ASAR_PATH); } catch (_) {}
         try { if (MAC_INFO_PLIST && fs.existsSync(MAC_INFO_PLIST + '.bak')) fs.copyFileSync(MAC_INFO_PLIST + '.bak', MAC_INFO_PLIST); } catch (_) {}
         try { if (C.MAC_APP_PATH) execFileSync('codesign', ['--force', '--deep', '--sign', '-', C.MAC_APP_PATH], { stdio: 'ignore' }); } catch (_) {}
-        return send(res, 500, { status: 'FAIL', msg: '打补丁失败:' + e.message + '(已从备份还原)' });
+        return send(res, 500, { status: 'FAIL', msg: '打补丁失败:' + e.message + '(已从备份还原)', manager_data_backup: dataBackup });
       }
     }
     // 把主词库导入此账号(单向 master -> account,不导出)

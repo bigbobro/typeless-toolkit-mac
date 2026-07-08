@@ -1,6 +1,7 @@
 # 用户运行时数据(含 token/词库,勿提交)
 accounts.json
 profiles/
+runtime-backups/
 *.csv
 *.bak
 
