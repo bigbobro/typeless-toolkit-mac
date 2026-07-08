@@ -1,5 +1,25 @@
 # Changelog
 
+## macos-v1.5.1 - 2026-07-09
+
+### Fixed
+
+- Fix `CDP_PORT is not defined` in the manager launch route.
+
+### Added
+
+- Add visible runtime backup status in the manager.
+- Add manual local runtime backup for `accounts.json`, `profiles/`, and the master CSV.
+- Add export/import backup package support for moving data across folders or machines.
+- Add automatic runtime data backup before device reset, paywall patch, and backup restore.
+- Warn users that exported backup packages contain Typeless login information, account tokens, and profile snapshots.
+
+### Safety
+
+- Keep `runtime-backups/` ignored by git.
+- Write `accounts.json` atomically and keep `accounts.json.bak`.
+- Stop treating a corrupted `accounts.json` as an empty account list; preserve a `.corrupt-*.bak` copy instead.
+
 ## macos-v1.5.0 - 2026-07-09
 
 ### Changed
