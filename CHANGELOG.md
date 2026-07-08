@@ -1,5 +1,24 @@
 # Changelog
 
+## macos-v2.0.0 - 2026-07-09
+
+### Changed
+
+- Redesign the manager UI with a monospace "terminal deck" visual language (warm paper, emerald accent), keeping every existing label and wording unchanged.
+- Restyle account cards as aligned record panels: a two-line header with an inline `当前` marker, consistent cross-card layout, and a bottom-pinned footer.
+- Replace the weekly-quota bar with a bordered-track progress bar that stays readable at 0% and when full, with green / amber / red usage levels.
+- Rebuild the dictionary tab as a dense multi-column grid with `全部` / `自动` / `手动` filters and a live word count, so large dictionaries are scannable at a glance.
+- Visualize the usage tab with a quota ring, stat cards, a speed meter, and a highlighted time-saved figure (seconds shown as minutes / hours).
+
+### Added
+
+- Add hover tooltips to every action, explaining what it does and its consequences.
+- Make previously ambiguous controls read as buttons: the `检测当前登录账号` chip, the card click-through hint, segmented tabs, and icon delete.
+
+### Notes
+
+- Visual and interaction refresh only; `manager.js` and all API behavior are unchanged.
+
 ## macos-v1.5.1 - 2026-07-09
 
 ### Fixed

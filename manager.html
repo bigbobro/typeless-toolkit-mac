@@ -5,85 +5,177 @@
 <title>Typeless 多账号管理</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-  :root { --bg:#f4f5f7; --card:#fff; --accent:#346BFF; --accent-soft:#eaf0ff; --text:#1a2233; --sub:#6b7280; --line:#eceef1; --ok:#22c55e; --warn:#f59e0b; --err:#ef4444; }
+  :root {
+    --bg:#f6f5f2; --surf:#fffefb; --panel:#fbfaf6;
+    --ink:#1c1e22; --mut:#6b6e74; --faint:#9a9c9f; --line:#e4e2db; --line2:#efeee9;
+    --grn:#0e7c5b; --grn-d:#0c6b4e; --grn-t:#e7f2ec; --grn-line:#bfe0d3;
+    --amber:#b4740b; --amber-t:#fbf1df; --amber-line:#ecdcbc;
+    --red:#c0392b; --red-t:#f7e9e6; --red-line:#e3c3bd;
+    --accent:var(--grn);
+    --mono:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Code",Menlo,Consolas,"Courier New",monospace;
+  }
   * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif; -webkit-font-smoothing:antialiased; }
+  body { margin:0; background:var(--bg); color:var(--ink); font-family:var(--mono); -webkit-font-smoothing:antialiased; }
   .wrap { max-width:1180px; margin:0 auto; padding:24px 20px 60px; }
-  header { display:flex; align-items:center; gap:12px; margin-bottom:8px; }
-  header h1 { font-size:20px; font-weight:650; margin:0; }
-  header .sub { color:var(--sub); font-size:13px; }
-  .toolbar { display:flex; gap:8px; flex-wrap:wrap; margin:14px 0 18px; }
-  .btn { background:var(--card); border:1px solid var(--line); color:var(--text); padding:8px 14px; border-radius:10px; font-size:13px; cursor:pointer; transition:.15s; display:inline-flex; align-items:center; gap:6px; }
-  .btn:hover { border-color:var(--accent); color:var(--accent); }
-  .btn.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
-  .btn.primary:hover { background:#2a5fe8; color:#fff; }
-  .btn.small { padding:5px 10px; font-size:12px; border-radius:8px; }
+  header { margin-bottom:8px; }
+  header h1 { font-size:20px; font-weight:700; margin:0; letter-spacing:-.01em; }
+  header .sub { color:var(--mut); font-size:13px; margin-top:6px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+
+  /* ===== 悬停说明 tooltip ===== */
+  [data-tip]{ position:relative; }
+  [data-tip]::after{
+    content:attr(data-tip); position:absolute; bottom:calc(100% + 9px); left:50%; transform:translateX(-50%) translateY(4px);
+    background:#1b1d21; color:#f4f3ef; font-size:12px; line-height:1.5; font-weight:400; letter-spacing:0;
+    padding:8px 11px; border-radius:8px; white-space:normal; width:max-content; max-width:230px; text-align:left;
+    opacity:0; visibility:hidden; transition:opacity .16s, transform .16s; z-index:200; pointer-events:none;
+    box-shadow:0 10px 30px rgba(28,30,34,.28); font-family:var(--mono);
+  }
+  [data-tip]::before{ content:''; position:absolute; bottom:calc(100% + 4px); left:50%; transform:translateX(-50%) translateY(4px);
+    border:5px solid transparent; border-top-color:#1b1d21; opacity:0; visibility:hidden; transition:.16s; z-index:200; pointer-events:none; }
+  [data-tip]:hover::after,[data-tip]:hover::before{ opacity:1; visibility:visible; transform:translateX(-50%) translateY(0); }
+  [data-tr]::after{ left:auto; right:0; transform:translateX(0) translateY(4px); }
+  [data-tr]:hover::after{ transform:translateX(0); }
+  [data-tr]::before{ left:auto; right:14px; }
+
+  /* ===== 顶部“检测当前登录账号”：变可点胶囊 ===== */
+  .chip { appearance:none; font:inherit; font-family:var(--mono); font-size:12px; font-weight:600; cursor:pointer;
+    color:var(--grn); background:var(--grn-t); border:1px solid var(--grn-line); border-radius:7px; padding:5px 11px; transition:.14s; }
+  .chip:hover { background:#d7ebe1; }
+  .chip:focus-visible { outline:2px solid var(--grn); outline-offset:2px; }
+
+  /* ===== 按钮 ===== */
+  .btn { font:inherit; font-family:var(--mono); background:var(--surf); border:1px solid var(--line); color:var(--ink);
+    padding:8px 13px; border-radius:8px; font-size:12.5px; font-weight:600; cursor:pointer; transition:.13s;
+    display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+  .btn:hover { border-color:var(--grn); color:var(--grn); background:var(--grn-t); }
+  .btn:focus-visible { outline:2px solid var(--grn); outline-offset:2px; }
+  .btn.primary { background:var(--grn); color:#fff; border-color:var(--grn); }
+  .btn.primary:hover { background:var(--grn-d); color:#fff; }
+  .btn.small { padding:6px 10px; font-size:12px; border-radius:7px; }
+  .btn.danger { color:var(--red); border-color:var(--red-line); background:var(--surf); }
+  .btn.danger:hover { background:var(--red-t); border-color:var(--red); color:var(--red); }
   .btn:disabled { opacity:.5; cursor:not-allowed; }
-  .banner { background:var(--accent-soft); border:1px solid #d4e0ff; color:#3b5bdb; padding:10px 14px; border-radius:12px; font-size:13px; margin-bottom:16px; display:none; }
-  .backup-panel { background:#fff; border:1px solid var(--line); border-radius:12px; padding:10px 12px; margin-bottom:12px; display:flex; align-items:center; justify-content:space-between; gap:12px; box-shadow:0 1px 2px rgba(16,24,40,.03); }
-  .backup-main { min-width:0; display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:13px; }
-  .backup-badge { font-size:12px; font-weight:650; padding:3px 8px; border-radius:999px; background:#f0f1f3; color:var(--sub); }
-  .backup-badge.ok { background:#e7f7ee; color:#1a8243; }
-  .backup-badge.warn { background:#fff3e0; color:#b26a00; }
-  .backup-badge.err { background:#fdecec; color:#c01f1f; }
-  .backup-text { font-weight:600; }
-  .backup-meta { color:var(--sub); font-size:12px; }
-  .backup-sensitive { color:#c01f1f; font-size:12px; font-weight:600; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(330px,1fr)); gap:14px; }
-  .card { background:var(--card); border-radius:16px; padding:16px 16px 14px; border:1px solid var(--line); box-shadow:0 1px 2px rgba(16,24,40,.03); cursor:pointer; transition:.15s; position:relative; }
-  .card:hover { box-shadow:0 6px 20px rgba(16,24,40,.07); transform:translateY(-1px); }
-  .card .top { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
-  .nick { font-weight:650; font-size:15px; }
-  .email { color:var(--sub); font-size:12px; margin-top:2px; }
-  .badge { font-size:11px; padding:2px 8px; border-radius:20px; background:#f0f1f3; color:var(--sub); }
-  .badge.free { background:#fff3e0; color:#b26a00; }
-  .badge.pro { background:#e7f7ee; color:#1a8243; }
-  .badge.invalid { background:#fdecec; color:#c01f1f; }
-  .row { display:flex; justify-content:space-between; font-size:12px; color:var(--sub); margin-top:6px; }
-  .row b { color:var(--text); font-weight:600; }
-  .bar { height:8px; background:#f0f1f3; border-radius:6px; overflow:hidden; margin:6px 0 2px; }
-  .bar > i { display:block; height:100%; background:var(--accent); border-radius:6px; }
-  .bar.warn > i { background:var(--warn); }
-  .bar.err > i { background:var(--err); }
-  .mini { display:flex; gap:10px; margin-top:10px; }
-  .mini .m { flex:1; background:#f8f9fb; border-radius:10px; padding:8px 10px; }
-  .mini .m .k { font-size:11px; color:var(--sub); }
-  .mini .m .v { font-size:14px; font-weight:650; margin-top:2px; }
-  .tag-active { position:absolute; top:14px; right:-30px; background:var(--accent); color:#fff; font-size:10px; padding:3px 34px; transform:rotate(45deg); display:none; }
-  .card.active .tag-active { display:block; }
-  .card.active { box-shadow:0 0 0 2px var(--accent) inset; }
-  .empty { text-align:center; color:var(--sub); padding:50px 0; }
-  /* 弹窗 */
-  .mask { position:fixed; inset:0; background:rgba(16,24,40,.35); display:none; align-items:center; justify-content:center; z-index:50; }
+  .toolbar { display:flex; gap:8px; flex-wrap:wrap; margin:14px 0 18px; align-items:center; }
+  .toolbar .sep { width:1px; align-self:stretch; background:var(--line); margin:2px 4px; }
+
+  /* ===== 顶部提示条 / 备份区 ===== */
+  .banner { background:var(--grn-t); border:1px solid var(--grn-line); color:var(--grn-d); padding:10px 13px; border-radius:9px; font-size:12.5px; margin-bottom:16px; display:none; }
+  .backup-panel { background:var(--surf); border:1px solid var(--line); border-radius:10px; padding:11px 13px; margin-bottom:12px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+  .backup-main { min-width:0; display:flex; align-items:center; gap:9px; flex-wrap:wrap; font-size:12.5px; }
+  .backup-badge { font-size:11px; font-weight:700; padding:3px 8px; border-radius:6px; background:var(--line2); color:var(--mut); border:1px solid var(--line); }
+  .backup-badge.ok { background:var(--grn-t); color:var(--grn-d); border-color:var(--grn-line); }
+  .backup-badge.warn { background:var(--amber-t); color:var(--amber); border-color:var(--amber-line); }
+  .backup-badge.err { background:var(--red-t); color:var(--red); border-color:var(--red-line); }
+  .backup-text { font-weight:700; }
+  .backup-meta { color:var(--mut); font-size:11.5px; }
+  .backup-sensitive { color:var(--red); font-size:11.5px; font-weight:600; }
+  .backup-actions { display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
+
+  /* ===== 账号卡片（记录条） ===== */
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(340px,1fr)); gap:12px; align-items:stretch; }
+  .card { background:var(--surf); border:1px solid var(--line); border-radius:10px; overflow:hidden; cursor:pointer; transition:.14s; position:relative; display:flex; flex-direction:column; }
+  .card:hover { border-color:#c9c6bd; box-shadow:0 10px 26px -18px rgba(28,30,34,.45); }
+  .card.on { border-color:var(--grn); box-shadow:0 0 0 1px var(--grn); }
+  .card .chead { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; padding:12px 13px; border-bottom:1px dashed var(--line); }
+  .card .cid { min-width:0; }
+  .card .nrow { display:flex; align-items:center; gap:7px; min-width:0; }
+  .card .nick { font-size:14px; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .card .curmark { flex:none; font-size:10px; font-weight:700; color:#fff; background:var(--grn); border-radius:5px; padding:2px 7px; letter-spacing:.04em; white-space:nowrap; }
+  .card .email { color:var(--mut); font-size:11.5px; margin-top:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .card .flag { flex:none; margin-top:1px; font-size:10.5px; font-weight:700; letter-spacing:.04em; text-transform:uppercase;
+    color:var(--amber); background:var(--amber-t); border:1px solid var(--amber-line); padding:2px 7px; border-radius:5px; }
+  .card .flag.bad { color:var(--red); background:var(--red-t); border-color:var(--red-line); }
+  .card .cbody { padding:13px 13px 0; display:flex; flex-direction:column; flex:1; }
+  .qrow { display:flex; justify-content:space-between; align-items:baseline; font-size:12px; color:var(--mut); }
+  .qrow b { color:var(--ink); font-weight:700; font-variant-numeric:tabular-nums; }
+  .qtrack { position:relative; height:12px; background:var(--line2); border:1px solid var(--line); border-radius:6px; overflow:hidden; margin:8px 0 9px; }
+  .qtrack > i { position:absolute; left:0; top:0; bottom:0; background:var(--grn); border-radius:5px; transition:width .3s; }
+  .qtrack.warn > i { background:var(--amber); }
+  .qtrack.over > i { background:var(--red); }
+  .mini { display:grid; grid-template-columns:repeat(3,1fr); gap:1px; background:var(--line); border:1px solid var(--line); border-radius:7px; overflow:hidden; margin-top:2px; }
+  .mini .m { background:var(--surf); padding:8px 9px; }
+  .mini .m .k { font-size:10.5px; color:var(--faint); }
+  .mini .m .v { font-size:14px; font-weight:700; margin-top:2px; font-variant-numeric:tabular-nums; }
+  .cfoot { display:flex; align-items:center; gap:10px; margin-top:auto; padding:11px 0; border-top:1px dashed var(--line); font-size:11.5px; }
+  .cfoot .snap { color:var(--mut); }
+  .cbtn { font:inherit; font-family:var(--mono); margin-left:auto; font-size:11.5px; font-weight:600; cursor:pointer;
+    color:var(--grn); background:var(--grn-t); border:1px solid var(--grn-line); border-radius:6px; padding:5px 10px; transition:.13s; }
+  .cbtn:hover { background:#d7ebe1; }
+  .cbtn.off { color:var(--faint); background:var(--line2); border-color:var(--line); cursor:not-allowed; }
+  .copen { margin:0 -13px; padding:9px 13px; background:var(--panel); border-top:1px solid var(--line); display:flex; align-items:center; justify-content:space-between;
+    font-size:11.5px; color:var(--mut); transition:.14s; }
+  .copen span { transition:.14s; }
+  .card:hover .copen { background:var(--grn-t); color:var(--grn-d); }
+  .card:hover .copen .arw { transform:translateX(3px); }
+  .empty { text-align:center; color:var(--mut); padding:50px 0; font-size:13px; }
+
+  /* ===== 弹窗 ===== */
+  .mask { position:fixed; inset:0; background:rgba(28,30,34,.4); display:none; align-items:center; justify-content:center; z-index:50; }
   .mask.on { display:flex; }
-  .modal { background:#fff; border-radius:18px; width:min(720px,94vw); max-height:88vh; display:flex; flex-direction:column; overflow:hidden; }
-  .modal .hd { padding:16px 18px; border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; }
-  .modal .hd h3 { margin:0; font-size:16px; }
-  .modal .bd { padding:16px 18px; overflow:auto; }
-  .tabs { display:flex; gap:6px; margin-bottom:14px; }
-  .tab { padding:6px 12px; border-radius:8px; font-size:13px; cursor:pointer; color:var(--sub); }
-  .tab.on { background:var(--accent-soft); color:var(--accent); font-weight:600; }
-  .wordlist { display:flex; flex-direction:column; gap:6px; }
-  .word { display:flex; align-items:center; justify-content:space-between; padding:8px 12px; background:#f8f9fb; border-radius:9px; font-size:13px; }
-  .word .t { font-weight:500; }
-  .word .meta { font-size:11px; color:var(--sub); display:flex; gap:8px; align-items:center; }
-  .word .del { color:var(--err); cursor:pointer; opacity:.6; }
-  .word .del:hover { opacity:1; }
-  .pill { font-size:10px; padding:1px 6px; border-radius:6px; background:#eef0f3; }
-  .pill.auto { background:#fff3e0; color:#b26a00; }
-  input.fld { border:1px solid var(--line); border-radius:9px; padding:8px 11px; font-size:13px; width:100%; outline:none; }
-  input.fld:focus { border-color:var(--accent); }
+  .modal { background:var(--surf); border:1px solid var(--line); border-radius:12px; width:min(720px,94vw); max-height:88vh; display:flex; flex-direction:column; overflow:hidden; box-shadow:0 30px 70px -25px rgba(28,30,34,.5); }
+  .modal .hd { padding:14px 16px; border-bottom:1px dashed var(--line); display:flex; align-items:center; justify-content:space-between; background:var(--panel); }
+  .modal .hd h3 { margin:0; font-size:15px; font-weight:700; }
+  .modal .bd { padding:16px; overflow:auto; }
+  /* 分段标签页 */
+  .tabs { display:inline-flex; gap:2px; margin-bottom:14px; background:var(--line2); border:1px solid var(--line); padding:3px; border-radius:9px; }
+  .tab { padding:6px 14px; border-radius:6px; font-size:12.5px; font-weight:600; cursor:pointer; color:var(--mut); transition:.14s; user-select:none; }
+  .tab:hover { color:var(--ink); }
+  .tab.on { background:var(--surf); color:var(--grn); box-shadow:0 1px 2px rgba(28,30,34,.12); }
+  /* 词库：筛选 + 多列紧凑网格 */
+  .dicttools { display:flex; gap:10px; align-items:center; margin-bottom:10px; flex-wrap:wrap; }
+  .wfilter { display:inline-flex; gap:2px; background:var(--line2); border:1px solid var(--line); padding:3px; border-radius:8px; flex:none; }
+  .wf { font:inherit; font-family:var(--mono); font-size:12px; font-weight:600; cursor:pointer; color:var(--mut); background:none; border:0; padding:5px 12px; border-radius:6px; transition:.13s; }
+  .wf:hover { color:var(--ink); }
+  .wf.on { background:var(--surf); color:var(--grn); box-shadow:0 1px 2px rgba(28,30,34,.12); }
+  .wcount { font-size:11.5px; color:var(--faint); margin-left:auto; }
+  .wgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:8px; }
+  .wcell { display:flex; align-items:center; gap:8px; padding:9px 10px; background:var(--surf); border:1px solid var(--line); border-radius:8px; font-size:13px; transition:.12s; }
+  .wcell:hover { border-color:#c9c6bd; }
+  .wcell .wicon { flex:none; font-size:12px; color:var(--amber); }
+  .wcell .wicon.auto { color:var(--grn); }
+  .wcell .wt { flex:1; min-width:0; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .wcell .wdel { flex:none; color:var(--faint); cursor:pointer; opacity:0; font-size:12px; padding:2px 5px; border-radius:5px; transition:.12s; }
+  .wcell:hover .wdel { opacity:1; }
+  .wcell .wdel:hover { color:var(--red); background:var(--red-t); }
+  /* 用量：可视化 */
+  .uwrap { display:flex; flex-direction:column; gap:12px; }
+  .uhero { display:flex; gap:18px; align-items:center; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px 18px; }
+  .uring { flex:none; width:104px; height:104px; border-radius:50%; background:conic-gradient(var(--ringc,var(--grn)) calc(var(--p)*1%), var(--line2) 0); display:flex; align-items:center; justify-content:center; }
+  .uring .uring-c { background:var(--surf); width:82px; height:82px; border-radius:50%; display:flex; flex-direction:column; align-items:center; justify-content:center; }
+  .uring .uring-c b { font-size:22px; font-weight:700; font-variant-numeric:tabular-nums; line-height:1; }
+  .uring .uring-c span { font-size:10.5px; color:var(--mut); margin-top:4px; }
+  .uhero-side { flex:1; min-width:0; }
+  .uhero-side .uline { display:flex; justify-content:space-between; align-items:baseline; font-size:13px; padding:5px 0; }
+  .uhero-side .uline .mut { color:var(--mut); }
+  .uhero-side .uline b { font-variant-numeric:tabular-nums; font-weight:700; }
+  .ustats { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; }
+  .ustat { background:var(--surf); border:1px solid var(--line); border-radius:10px; padding:13px 14px; }
+  .ustat .uk { font-size:11.5px; color:var(--mut); }
+  .ustat .uv { font-size:22px; font-weight:700; margin-top:4px; font-variant-numeric:tabular-nums; }
+  .ustat .uv em { font-size:13px; font-style:normal; color:var(--mut); font-weight:600; margin-left:2px; }
+  .ustat .usub { font-size:11px; color:var(--faint); margin-top:3px; }
+  .ustat.hl { background:var(--grn-t); border-color:var(--grn-line); }
+  .ustat.hl .uk, .ustat.hl .uv { color:var(--grn-d); }
+  .uspeed { height:6px; background:var(--line2); border-radius:4px; margin-top:9px; overflow:hidden; }
+  .uspeed > i { display:block; height:100%; background:var(--grn); border-radius:4px; }
+  input.fld { font-family:var(--mono); border:1px solid var(--line); border-radius:7px; padding:8px 11px; font-size:13px; width:100%; outline:none; background:var(--surf); color:var(--ink); }
+  input.fld:focus { border-color:var(--grn); }
+  input.fld::placeholder { color:var(--faint); }
   .field { margin-bottom:12px; }
-  .field label { display:block; font-size:12px; color:var(--sub); margin-bottom:5px; }
-  .statbox { background:#f8f9fb; border-radius:12px; padding:14px; }
-  .statbox .line { display:flex; justify-content:space-between; font-size:13px; padding:5px 0; border-bottom:1px dashed var(--line); }
+  .field label { display:block; font-size:11.5px; color:var(--mut); margin-bottom:5px; }
+  .statbox { background:var(--panel); border:1px solid var(--line); border-radius:9px; padding:6px 14px; }
+  .statbox .line { display:flex; justify-content:space-between; font-size:13px; padding:9px 0; border-bottom:1px dashed var(--line); }
   .statbox .line:last-child { border:none; }
-  .ring { width:88px; height:88px; border-radius:50%; background:conic-gradient(var(--accent) calc(var(--p)*1%), #eef0f3 0); display:flex; align-items:center; justify-content:center; margin:0 auto 8px; }
-  .ring span { background:#fff; width:70px; height:70px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:14px; }
-  .master-edit textarea { width:100%; min-height:180px; border:1px solid var(--line); border-radius:10px; padding:10px; font-size:13px; font-family:inherit; resize:vertical; }
-  .toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); background:#1a2233; color:#fff; padding:10px 18px; border-radius:10px; font-size:13px; z-index:80; opacity:0; transition:.2s; pointer-events:none; }
+  .statbox .line b { font-variant-numeric:tabular-nums; }
+  .ring { width:88px; height:88px; border-radius:50%; background:conic-gradient(var(--grn) calc(var(--p)*1%), var(--line2) 0); display:flex; align-items:center; justify-content:center; margin:0 auto 8px; }
+  .ring span { background:var(--surf); width:70px; height:70px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:14px; }
+  .master-edit textarea, textarea#masterArea { width:100%; min-height:180px; font-family:var(--mono); border:1px solid var(--line); border-radius:8px; padding:10px; font-size:13px; resize:vertical; background:var(--surf); color:var(--ink); outline:none; }
+  textarea#masterArea:focus { border-color:var(--grn); }
+  .modal-actions { margin-top:16px; padding-top:14px; border-top:1px dashed var(--line); display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .modal-actions .spacer { flex:1; }
+  .toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); background:#1b1d21; color:#f4f3ef; padding:10px 18px; border-radius:9px; font-size:13px; font-family:var(--mono); z-index:80; opacity:0; transition:.2s; pointer-events:none; }
   .toast.on { opacity:1; }
-  a.link { color:var(--accent); cursor:pointer; }
+  @media (prefers-reduced-motion: reduce){ *{ transition:none !important; } }
 </style>
 </head>
 <body>
@@ -91,7 +183,7 @@
   <header>
     <div>
       <h1>Typeless 多账号管理</h1>
-      <div class="sub">周额度 8,000 字/号 · 词库跨账号同步 · <a class="link" id="curLink">检测当前登录账号</a></div>
+      <div class="sub">周额度 8,000 字/号 · 词库跨账号同步 · <button class="chip" id="curLink" data-tip="检测当前 Typeless 正登录哪个账号，并在下方高亮">检测当前登录账号</button></div>
     </div>
   </header>
 
@@ -104,22 +196,23 @@
       <span class="backup-meta" id="backupMeta"></span>
       <span class="backup-sensitive">备份包包含 Typeless 登录信息,请勿随意分享</span>
     </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
-      <button class="btn small" onclick="backupNow()">立即备份</button>
-      <button class="btn small" onclick="exportBackup()">导出备份包</button>
-      <button class="btn small" onclick="pickBackupFile()">导入恢复</button>
+    <div class="backup-actions">
+      <button class="btn small" data-tip="把当前账号、登录态、主词库存一份本地备份" onclick="backupNow()">立即备份</button>
+      <button class="btn small" data-tip="导出一个可迁移的备份包文件（含登录信息，勿分享）" onclick="exportBackup()">导出备份包</button>
+      <button class="btn small" data-tr data-tip="选择备份包文件，覆盖恢复账号 / 快照 / 主词库" onclick="pickBackupFile()">导入恢复</button>
     </div>
     <input id="backupFile" type="file" accept="application/json,.json" style="display:none" onchange="restoreBackupFile(this)">
   </div>
 
   <div class="toolbar">
-    <button class="btn primary" onclick="launch()">⏻ 启动 Typeless</button>
-    <button class="btn" onclick="addAccount()">＋ 添加当前账号</button>
-    <button class="btn" onclick="loadAccounts()">↻ 全部刷新</button>
-    <button class="btn" onclick="syncAll()">⇄ 全部同步</button>
-    <button class="btn" onclick="openMaster()">✎ 主词库编辑</button>
-    <button class="btn" onclick="resetDevice()" style="color:#c01f1f;border-color:#f5c2c2">⊘ 解除设备限制</button>
-    <button class="btn" onclick="patchPaywall()" style="color:#c01f1f;border-color:#f5c2c2">⊘ 解除弹窗提示</button>
+    <button class="btn primary" data-tip="以调试端口启动 Typeless，管理器才能抓账号、读用量" onclick="launch()">⏻ 启动 Typeless</button>
+    <button class="btn" data-tip="抓取当前 Typeless 已登录账号的凭证并加入管理器（会重载一次主窗口）" onclick="addAccount()">＋ 添加当前账号</button>
+    <button class="btn" data-tip="重新拉取所有账号的用量、词库数、token 状态" onclick="loadAccounts()">↻ 全部刷新</button>
+    <button class="btn" data-tip="所有账号词库互相补齐，并汇总进主词库" onclick="syncAll()">⇄ 全部同步</button>
+    <button class="btn" data-tip="编辑作为同步基准的主词库（一行一个词）" onclick="openMaster()">✎ 主词库编辑</button>
+    <span class="sep"></span>
+    <button class="btn danger" data-tip="重置设备 ID 回到登录页，以便注册新账号；当前账号会登出（有快照可切回）" onclick="resetDevice()">⊘ 解除设备限制</button>
+    <button class="btn danger" data-tr data-tip="给 Typeless 打补丁去掉升级/会员弹窗；App 自动更新后需重打" onclick="patchPaywall()">⊘ 解除弹窗提示</button>
   </div>
 
   <div id="grid" class="grid"></div>
@@ -128,7 +221,7 @@
 <!-- 账号详情 -->
 <div class="mask" id="detailMask" onclick="if(event.target===this)closeModal('detailMask')">
   <div class="modal">
-    <div class="hd"><h3 id="dTitle">账号详情</h3><button class="btn small" onclick="closeModal('detailMask')">✕</button></div>
+    <div class="hd"><h3 id="dTitle">账号详情</h3><button class="btn small" data-tr data-tip="关闭" onclick="closeModal('detailMask')">✕</button></div>
     <div class="bd">
       <div class="tabs">
         <div class="tab on" onclick="selTab(this,'dict')">词库</div>
@@ -137,20 +230,29 @@
       </div>
       <div id="tab-dict">
         <div style="display:flex;gap:8px;margin-bottom:10px;">
-          <input class="fld" id="wordInput" placeholder="输入新词,回车添加" onkeydown="if(event.key==='Enter')addWord()">
-          <button class="btn small primary" onclick="addWord()">加词</button>
+          <input class="fld" id="wordInput" placeholder="输入新词,回车添加" style="flex:1" onkeydown="if(event.key==='Enter')addWord()">
+          <button class="btn small primary" data-tr data-tip="把这个词加入当前账号的词库" onclick="addWord()">加词</button>
         </div>
-        <input class="fld" id="dictSearch" placeholder="筛选词条…" oninput="renderDict()" style="margin-bottom:10px;">
-        <div class="wordlist" id="wordList"></div>
+        <div class="dicttools">
+          <div class="wfilter">
+            <button class="wf on" onclick="setDictFilter(this,'all')">全部</button>
+            <button class="wf" onclick="setDictFilter(this,'auto')">自动</button>
+            <button class="wf" onclick="setDictFilter(this,'manual')">手动</button>
+          </div>
+          <input class="fld" id="dictSearch" placeholder="筛选词条…" oninput="renderDict()" style="flex:1;min-width:130px;">
+          <span class="wcount" id="wordCount"></span>
+        </div>
+        <div id="wordList"></div>
       </div>
       <div id="tab-usage" style="display:none"></div>
       <div id="tab-personal" style="display:none"></div>
-      <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;">
-        <button class="btn small primary" onclick="syncOne()">同步本账号</button>
-        <button class="btn small" onclick="importMaster()">从主词库导入</button>
-        <button class="btn small" onclick="copyFrom()">从其他号复制</button>
-        <button class="btn small" onclick="saveSnap()">更新快照</button>
-        <button class="btn small" onclick="rmAccount()">移除账号</button>
+      <div class="modal-actions">
+        <button class="btn small primary" data-tip="把该账号词库与主词库双向补齐" onclick="syncOne()">同步本账号</button>
+        <button class="btn small" data-tip="仅把主词库里缺的词导入该账号（单向）" onclick="importMaster()">从主词库导入</button>
+        <button class="btn small" data-tip="从另一个账号复制词库到该账号" onclick="copyFrom()">从其他号复制</button>
+        <button class="btn small" data-tip="把当前 Typeless 登录态存为该账号快照，供切换用" onclick="saveSnap()">更新快照</button>
+        <span class="spacer"></span>
+        <button class="btn small danger" data-tr data-tip="仅从管理器移除该账号，不影响 Typeless 本身" onclick="rmAccount()">移除账号</button>
       </div>
     </div>
   </div>
@@ -159,13 +261,13 @@
 <!-- 主词库编辑 -->
 <div class="mask" id="masterMask" onclick="if(event.target===this)closeModal('masterMask')">
   <div class="modal">
-    <div class="hd"><h3>主词库（各账号并集）</h3><button class="btn small" onclick="closeModal('masterMask')">✕</button></div>
-    <div class="bd">
-      <div class="sub" style="color:var(--sub);font-size:12px;margin-bottom:8px;">一行一个词。保存后会作为所有账号同步的基准（同步时把缺失的词导入各账号，并吸收各账号已有词）。</div>
+    <div class="hd"><h3>主词库（各账号并集）</h3><button class="btn small" data-tr data-tip="关闭" onclick="closeModal('masterMask')">✕</button></div>
+    <div class="bd master-edit">
+      <div class="sub" style="color:var(--mut);font-size:12px;margin-bottom:8px;line-height:1.6;">一行一个词。保存后会作为所有账号同步的基准（同步时把缺失的词导入各账号，并吸收各账号已有词）。</div>
       <textarea id="masterArea"></textarea>
       <div style="margin-top:10px;display:flex;gap:8px;align-items:center;">
-        <button class="btn small primary" onclick="saveMaster()">保存</button>
-        <span id="masterCnt" style="font-size:12px;color:var(--sub);"></span>
+        <button class="btn small primary" data-tip="保存主词库；作为所有账号同步的基准" onclick="saveMaster()">保存</button>
+        <span id="masterCnt" style="font-size:12px;color:var(--mut);"></span>
       </div>
     </div>
   </div>
@@ -174,18 +276,18 @@
 <!-- 添加账号 -->
 <div class="mask" id="addMask" onclick="if(event.target===this)closeModal('addMask')">
   <div class="modal" style="width:min(440px,94vw)">
-    <div class="hd"><h3>添加账号</h3><button class="btn small" onclick="closeModal('addMask')">✕</button></div>
+    <div class="hd"><h3>添加账号</h3><button class="btn small" data-tr data-tip="关闭" onclick="closeModal('addMask')">✕</button></div>
     <div class="bd">
       <div id="addStep1">
-        <div style="font-size:13px;color:var(--sub);line-height:1.7;margin-bottom:12px;">先在 Typeless 里登录要添加的账号，然后点下方按钮。工具会自动抓取当前登录账号的凭证（会重载一次主窗口）。</div>
-        <button class="btn primary" onclick="doCapture()" id="capBtn">抓取当前账号</button>
+        <div style="font-size:13px;color:var(--mut);line-height:1.7;margin-bottom:12px;">先在 Typeless 里登录要添加的账号，然后点下方按钮。工具会自动抓取当前登录账号的凭证（会重载一次主窗口）。</div>
+        <button class="btn primary" data-tip="抓取当前 Typeless 登录账号的凭证（会重载一次主窗口）" onclick="doCapture()" id="capBtn">抓取当前账号</button>
       </div>
       <div id="addStep2" style="display:none">
         <div class="field"><label>昵称</label><input class="fld" id="addNick"></div>
         <div class="field"><label>邮箱</label><input class="fld" id="addEmail" readonly></div>
         <div class="field"><label>套餐 / user_id</label><input class="fld" id="addMeta" readonly></div>
-        <button class="btn primary" onclick="saveAccount()">保存</button>
-        <span id="addExist" style="font-size:12px;color:var(--warn);margin-left:10px;"></span>
+        <button class="btn primary" data-tip="保存该账号到管理器，并自动把主词库导入此号" onclick="saveAccount()">保存</button>
+        <span id="addExist" style="font-size:12px;color:var(--amber);margin-left:10px;"></span>
       </div>
     </div>
   </div>
@@ -195,7 +297,7 @@
 
 <script>
 const api = (p, opt={}) => fetch(p, { headers:{'Content-Type':'application/json'}, ...opt }).then(r=>r.json());
-let ACCOUNTS = [], CUR_ID = null, curDetail = null, curWords = [];
+let ACCOUNTS = [], CUR_ID = null, curDetail = null, curWords = [], dictFilter = 'all';
 
 function toast(m){ const t=document.getElementById('toast'); t.textContent=m; t.classList.add('on'); setTimeout(()=>t.classList.remove('on'),1800); }
 function openModal(id){ document.getElementById(id).classList.add('on'); }
@@ -296,25 +398,33 @@ function render(){
     const u=live.usage||{};
     const ok=u.week_word_usage_value!=null; // liveStatus 失败时 usage 为空,显示 — 而非误导的 0
     const used=ok?u.week_word_usage_value:0, lim=u.week_word_usage_limit||8000;
-    const p=pct(used,lim); const pcls=p>80?'err':p>60?'warn':'';
+    const p=pct(used,lim); const over=ok&&used>lim;
     const valid=live.token_valid!==false;
-    return `<div class="card ${a.user_id===CUR_ID?'active':''}" onclick="openDetail('${a.user_id}')">
-      <div class="tag-active">当前</div>
-      <div class="top">
-        <div><div class="nick">${esc(a.nickname)}</div><div class="email">${esc(a.email||'')}</div></div>
-        <span class="badge ${a.role||''} ${valid?'':'invalid'}">${valid?(a.role||'未知'):'token失效'}</span>
+    const cur=a.user_id===CUR_ID;
+    return `<div class="card ${cur?'on':''}" onclick="openDetail('${a.user_id}')">
+      <div class="chead">
+        <div class="cid">
+          <div class="nrow"><span class="nick">${esc(a.nickname)}</span>${cur?'<span class="curmark">当前</span>':''}</div>
+          <div class="email">${esc(a.email||'')}</div>
+        </div>
+        <span class="flag ${valid?'':'bad'}">${valid?(a.role||'未知'):'token失效'}</span>
       </div>
-      <div class="row"><span>本周额度</span><b>${ok?used.toLocaleString():'—'} / ${lim.toLocaleString()}</b></div>
-      <div class="bar ${pcls}"><i style="width:${p}%"></i></div>
-      <div class="row"><span>剩余字数</span><b>${ok?(lim-used).toLocaleString():'—'}</b></div>
-      <div class="mini">
-        <div class="m"><div class="k">词库词条</div><div class="v">${live.dict_count??'-'}</div></div>
-        <div class="m"><div class="k">个性化</div><div class="v">${Math.round((live.personal?.total_learning_ratio||0)*100)}%</div></div>
-        <div class="m"><div class="k">总字数</div><div class="v">${(u.total_words||0).toLocaleString()}</div></div>
-      </div>
-      <div style="margin-top:10px;display:flex;align-items:center;justify-content:space-between;">
-        <span style="font-size:11px;color:var(--sub)">${a.has_snapshot?'快照已存':'未存快照'}</span>
-        <button class="btn small" onclick="event.stopPropagation();switchTo('${a.user_id}')" ${a.has_snapshot?'':'disabled'}>切换到此号</button>
+      <div class="cbody">
+        <div class="qrow"><span>本周额度</span><b>${ok?used.toLocaleString():'—'} / ${lim.toLocaleString()}</b></div>
+        <div class="qtrack ${over?'over':(p>80?'warn':'')}"><i style="width:${ok?(over?100:p):0}%"></i></div>
+        <div class="qrow"><span>剩余字数</span><b>${ok?(lim-used).toLocaleString():'—'}</b></div>
+        <div class="mini">
+          <div class="m"><div class="k">词库词条</div><div class="v">${live.dict_count??'-'}</div></div>
+          <div class="m"><div class="k">个性化</div><div class="v">${Math.round((live.personal?.total_learning_ratio||0)*100)}%</div></div>
+          <div class="m"><div class="k">总字数</div><div class="v">${(u.total_words||0).toLocaleString()}</div></div>
+        </div>
+        <div class="cfoot">
+          <span class="snap">${a.has_snapshot?'快照已存':'未存快照'}</span>
+          ${a.has_snapshot
+            ? `<button class="cbtn" data-tr data-tip="还原该账号登录态快照并重启 Typeless" onclick="event.stopPropagation();switchTo('${a.user_id}')">切换到此号</button>`
+            : `<span class="cbtn off" data-tr data-tip="该账号还没有快照，先在 Typeless 登录该号后点「更新快照」">切换到此号</span>`}
+        </div>
+        <div class="copen"><span>查看词库 / 用量 / 个性化</span><span class="arw">›</span></div>
       </div>
     </div>`;
   }).join('');
@@ -329,6 +439,8 @@ async function openDetail(id){
   selTab(document.querySelector('.tab'),'dict');
   const r=await api('/api/accounts/'+encodeURIComponent(id)+'/dictionary');
   curWords = r.data?.words||[];
+  dictFilter='all';
+  document.querySelectorAll('.wf').forEach((b,i)=>b.classList.toggle('on', i===0));
   document.getElementById('dictSearch').value=''; renderDict();
   renderUsage(a); renderPersonal(a);
 }
@@ -336,30 +448,59 @@ function selTab(el,tab){
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on')); el.classList.add('on');
   ['dict','usage','personal'].forEach(t=>document.getElementById('tab-'+t).style.display = t===tab?'block':'none');
 }
+function setDictFilter(el,f){
+  dictFilter=f;
+  document.querySelectorAll('.wf').forEach(b=>b.classList.remove('on'));
+  el.classList.add('on');
+  renderDict();
+}
 function renderDict(){
   const q=(document.getElementById('dictSearch').value||'').trim().toLowerCase();
-  const ws=curWords.filter(w=>!q||(w.term||'').toLowerCase().includes(q));
-  document.getElementById('wordList').innerHTML = ws.length? ws.map(w=>`<div class="word">
-    <span class="t">${esc(w.term)}</span>
-    <span class="meta"><span class="pill ${w.auto?'auto':''}">${w.auto?'自动':'手动'}</span>${w.lang||''}<span class="del" onclick="delWord('${esc(w.term)}')">删除</span></span>
-  </div>`).join('') : '<div class="empty" style="padding:20px">无词条</div>';
+  let ws=curWords.filter(w=>!q||(w.term||'').toLowerCase().includes(q));
+  if(dictFilter==='auto') ws=ws.filter(w=>w.auto);
+  else if(dictFilter==='manual') ws=ws.filter(w=>!w.auto);
+  const cnt=document.getElementById('wordCount');
+  if(cnt) cnt.textContent=ws.length+' 词';
+  document.getElementById('wordList').innerHTML = ws.length
+    ? '<div class="wgrid">'+ws.map(w=>`<div class="wcell">
+        <span class="wicon ${w.auto?'auto':''}" data-tip="${w.auto?'自动添加':'手动添加'}">${w.auto?'✦':'✎'}</span>
+        <span class="wt" title="${esc(w.term)}">${esc(w.term)}</span>
+        <span class="wdel" data-tr data-tip="从该账号词库删除此词" onclick="delWord('${esc(w.term)}')">✕</span>
+      </div>`).join('')+'</div>'
+    : '<div class="empty" style="padding:20px">无匹配词条</div>';
 }
 function renderUsage(a){
-  const u=a.live?.usage||{}; const ok=u.week_word_usage_value!=null; const used=ok?u.week_word_usage_value:0,lim=u.week_word_usage_limit||8000;
-  document.getElementById('tab-usage').innerHTML=`<div class="statbox">
-    <div class="line"><span>本周已用</span><b>${ok?used.toLocaleString():'—'} / ${lim.toLocaleString()} 字</b></div>
-    <div class="line"><span>剩余</span><b>${ok?(lim-used).toLocaleString():'—'} 字</b></div>
-    <div class="line"><span>总听写字数</span><b>${(u.total_words||0).toLocaleString()}</b></div>
-    <div class="line"><span>录音总时长</span><b>${Math.round(u.total_audio_seconds||0)} 秒</b></div>
-    <div class="line"><span>平均语速</span><b>${u.avg_wpm||0} wpm</b></div>
-    <div class="line"><span>已节省</span><b>${u.mins_saved||0} 分钟</b></div>
+  const u=a.live?.usage||{};
+  const ok=u.week_word_usage_value!=null;
+  const used=ok?u.week_word_usage_value:0, lim=u.week_word_usage_limit||8000;
+  const rem=lim-used, p=pct(used,lim), over=ok&&used>lim;
+  const ringc=over?'var(--red)':(p>80?'var(--amber)':'var(--grn)');
+  const secs=Math.round(u.total_audio_seconds||0);
+  const mins=Math.round(secs/60);
+  const saved=u.mins_saved||0;
+  const wpm=u.avg_wpm||0;
+  const spd=Math.min(100, Math.round(wpm/250*100));
+  document.getElementById('tab-usage').innerHTML=`<div class="uwrap">
+    <div class="uhero">
+      <div class="uring" style="--p:${ok?(over?100:p):0};--ringc:${ringc}"><div class="uring-c"><b>${ok?p+'%':'—'}</b><span>本周已用</span></div></div>
+      <div class="uhero-side">
+        <div class="uline"><span class="mut">本周已用</span><b>${ok?used.toLocaleString():'—'} / ${lim.toLocaleString()} 字</b></div>
+        <div class="uline"><span class="mut">剩余</span><b style="color:${over?'var(--red)':'var(--grn-d)'}">${ok?rem.toLocaleString():'—'} 字</b></div>
+      </div>
+    </div>
+    <div class="ustats">
+      <div class="ustat"><div class="uk">总听写字数</div><div class="uv">${(u.total_words||0).toLocaleString()}</div><div class="usub">累计</div></div>
+      <div class="ustat"><div class="uk">录音总时长</div><div class="uv">${mins.toLocaleString()} <em>分钟</em></div><div class="usub">${secs.toLocaleString()} 秒</div></div>
+      <div class="ustat"><div class="uk">平均语速</div><div class="uv">${wpm} <em>wpm</em></div><div class="uspeed"><i style="width:${spd}%"></i></div></div>
+      <div class="ustat hl"><div class="uk">已节省</div><div class="uv">${(saved/60).toFixed(1)} <em>小时</em></div><div class="usub">约 ${Math.round(saved).toLocaleString()} 分钟</div></div>
+    </div>
   </div>`;
 }
 function renderPersonal(a){
   const p=a.live?.personal||{}; const ratio=p.total_learning_ratio||0;
   document.getElementById('tab-personal').innerHTML=`<div style="text-align:center">
     <div class="ring" style="--p:${Math.round(ratio*100)}"><span>${Math.round(ratio*100)}%</span></div>
-    <div style="color:var(--sub);font-size:12px">个性化学习进度</div>
+    <div style="color:var(--mut);font-size:12px">个性化学习进度</div>
     <div style="font-size:13px;margin-top:6px">${p.enabled?'已启用':'未启用'} · ${(p.category_stats||[]).length} 个学习类别</div>
   </div>`;
 }
