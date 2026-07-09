@@ -151,6 +151,31 @@ const server = http.createServer(async (req, res) => {
     if (m === 'GET' && p === '/api/paywall-status') {
       return send(res, 200, { status: 'OK', data: paywallStatus() });
     }
+    // 诊断 / 健康检查(只读聚合:路径/端口/登录/补丁状态/数据目录)
+    if (m === 'GET' && p === '/api/diagnostics') {
+      const ex = (x) => { try { return !!x && fs.existsSync(x); } catch (e) { return false; } };
+      let cdpReachable = false;
+      try { const rr = await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`); cdpReachable = rr.ok; } catch (e) {}
+      let writable = false; try { fs.accessSync(C.ROOT, fs.constants.W_OK); writable = true; } catch (e) {}
+      let accCount = 0; try { accCount = readAccounts().length; } catch (e) {}
+      const data = {
+        typeless: {
+          app_path: C.MAC_APP_PATH || '', app_found: ex(C.MAC_APP_PATH),
+          bin_path: C.TYPELESS_BIN || '', bin_found: ex(C.TYPELESS_BIN),
+          asar_path: ASAR_PATH || '', asar_found: ex(ASAR_PATH),
+          info_plist: MAC_INFO_PLIST || '', info_plist_found: ex(MAC_INFO_PLIST),
+          user_data_dir: C.USERDATA_DIR || '', user_data_found: ex(C.USERDATA_DIR),
+        },
+        cdp: { port: CDP_PORT, reachable: cdpReachable },
+        data: {
+          dir: C.ROOT, writable,
+          accounts_file: C.ACCOUNTS_FILE, accounts_count: accCount,
+          profiles_dir: C.PROFILES_DIR, runtime_backups_dir: C.RUNTIME_BACKUPS_DIR,
+          backup: runtimeDataStatus(),
+        },
+      };
+      return send(res, 200, { status: 'OK', data });
+    }
     // 解除升级弹窗(打 app.asar + Info.plist 完整性补丁,失败自动从备份还原)
     if (m === 'POST' && p === '/api/patch-paywall') {
       const dataBackup = backupRuntimeData('patch-paywall');

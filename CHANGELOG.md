@@ -1,5 +1,24 @@
 # Changelog
 
+## macos-v2.1.0 - 2026-07-09
+
+### Added
+
+- Add a "诊断 / 健康检查" panel (toolbar → 诊断): a read-only `/api/diagnostics` aggregate showing Typeless paths, debug port, current login, 去弹窗补丁 status, and the data directory, revealed step-by-step with a progress bar.
+- Show the on-open auto-detection as one unified progress bar (加载账号 → 检测当前登录 → 自检去弹窗补丁 → 完成), so each step is legible instead of several indicators flashing independently.
+- Self-check the 去弹窗补丁 on open and warn when a Typeless auto-update has reverted it.
+- Add zero-dependency `node:test` coverage for the runtime backup-bundle round-trip and the dictionary dedup/diff logic (`node --test`, 12 tests).
+
+### Changed
+
+- Surface the actual failure reason in add-word / delete-word / save-account / save-master toasts instead of a bare "失败".
+- Anchor the boot progress bar at the top with a fixed height so revealing other banners no longer shifts it.
+
+### Notes
+
+- The diagnostics endpoint is read-only; `manager.js` API behavior is otherwise unchanged.
+- `docs/architecture.md` (internal notes on patch internals) is kept local via `.gitignore`.
+
 ## macos-v2.0.0 - 2026-07-09
 
 ### Changed

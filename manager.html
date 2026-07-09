@@ -173,9 +173,46 @@
   textarea#masterArea:focus { border-color:var(--grn); }
   .modal-actions { margin-top:16px; padding-top:14px; border-top:1px dashed var(--line); display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
   .modal-actions .spacer { flex:1; }
+  /* 警告条(补丁被还原等) */
+  .banner.warn { background:var(--amber-t); border-color:var(--amber-line); color:var(--amber); display:none; align-items:center; gap:10px; justify-content:space-between; }
+  .banner.warn .x { cursor:pointer; font-weight:700; opacity:.7; padding:0 4px; }
+  .banner.warn .x:hover { opacity:1; }
+  /* 自检进行中 / 正常 */
+  .banner.check, .banner.ok { background:var(--grn-t); border-color:var(--grn-line); color:var(--grn-d); display:none; align-items:center; gap:10px; }
+  .spin { width:13px; height:13px; flex:none; border:2px solid rgba(14,124,91,.25); border-top-color:var(--grn-d); border-radius:50%; animation:spin .7s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  /* 开机自动检测进度条 */
+  .banner.boot { flex-direction:column; align-items:stretch; justify-content:center; gap:8px; min-height:52px; background:var(--grn-t); border-color:var(--grn-line); color:var(--grn-d); }
+  .boot-bar { height:6px; background:rgba(14,124,91,.16); border-radius:5px; overflow:hidden; }
+  .boot-bar > i { display:block; height:100%; width:0; background:var(--grn-d); border-radius:5px; transition:width .35s ease; }
+  .boot-txt { display:flex; align-items:center; gap:8px; font-size:12.5px; white-space:nowrap; }
+  .boot-txt .boot-step { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+  .boot-txt .cnt { flex:none; font-variant-numeric:tabular-nums; opacity:.65; }
+  /* 诊断面板 */
+  .diag-row { display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px dashed var(--line); font-size:13px; }
+  .diag-row:last-child { border:none; }
+  .diag-row .ddot { width:9px; height:9px; border-radius:50%; flex:none; }
+  .diag-row .ddot.ok { background:var(--grn); }
+  .diag-row .ddot.warn { background:var(--amber); }
+  .diag-row .ddot.bad { background:var(--red); }
+  .diag-row .ddot.neutral { background:var(--faint); }
+  .diag-row .dk { width:130px; flex:none; color:var(--mut); }
+  .diag-row .dv { flex:1; min-width:0; word-break:break-all; }
+  .diag-row .dv.mut { color:var(--faint); }
+  .diag-row .dv b { color:var(--ink); font-weight:600; }
+  .diag-row .dv .warn { color:var(--amber); font-weight:700; }
+  .diag-row .dv .bad { color:var(--red); font-weight:700; }
+  .diag-row.in { animation:rowIn .28s ease; }
+  @keyframes rowIn { from { opacity:0; transform:translateY(-4px); } to { opacity:1; transform:none; } }
+  .diag-prog { margin-bottom:14px; }
+  .diag-prog-bar { height:8px; background:var(--line2); border:1px solid var(--line); border-radius:6px; overflow:hidden; }
+  .diag-prog-bar > i { display:block; height:100%; width:0; background:var(--grn); border-radius:5px; transition:width .35s ease; }
+  .diag-prog-txt { margin-top:9px; font-size:12.5px; color:var(--mut); display:flex; align-items:center; gap:8px; }
+  .diag-prog-txt .cnt { margin-left:auto; font-variant-numeric:tabular-nums; color:var(--faint); }
+  .diag-prog-txt.done { color:var(--grn-d); font-weight:600; }
   .toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); background:#1b1d21; color:#f4f3ef; padding:10px 18px; border-radius:9px; font-size:13px; font-family:var(--mono); z-index:80; opacity:0; transition:.2s; pointer-events:none; }
   .toast.on { opacity:1; }
-  @media (prefers-reduced-motion: reduce){ *{ transition:none !important; } }
+  @media (prefers-reduced-motion: reduce){ *{ transition:none !important; animation:none !important; } }
 </style>
 </head>
 <body>
@@ -187,6 +224,7 @@
     </div>
   </header>
 
+  <div class="banner warn" id="patchBanner"></div>
   <div class="banner" id="banner"></div>
 
   <div class="backup-panel" id="backupPanel">
@@ -210,6 +248,7 @@
     <button class="btn" data-tip="重新拉取所有账号的用量、词库数、token 状态" onclick="loadAccounts()">↻ 全部刷新</button>
     <button class="btn" data-tip="所有账号词库互相补齐，并汇总进主词库" onclick="syncAll()">⇄ 全部同步</button>
     <button class="btn" data-tip="编辑作为同步基准的主词库（一行一个词）" onclick="openMaster()">✎ 主词库编辑</button>
+    <button class="btn" data-tip="体检：Typeless 路径 / 调试端口 / 当前登录 / 补丁状态 / 数据目录一览" onclick="openDiag()">◇ 诊断</button>
     <span class="sep"></span>
     <button class="btn danger" data-tip="重置设备 ID 回到登录页，以便注册新账号；当前账号会登出（有快照可切回）" onclick="resetDevice()">⊘ 解除设备限制</button>
     <button class="btn danger" data-tr data-tip="给 Typeless 打补丁去掉升级/会员弹窗；App 自动更新后需重打" onclick="patchPaywall()">⊘ 解除弹窗提示</button>
@@ -289,6 +328,17 @@
         <button class="btn primary" data-tip="保存该账号到管理器，并自动把主词库导入此号" onclick="saveAccount()">保存</button>
         <span id="addExist" style="font-size:12px;color:var(--amber);margin-left:10px;"></span>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- 诊断 / 健康检查 -->
+<div class="mask" id="diagMask" onclick="if(event.target===this)closeModal('diagMask')">
+  <div class="modal">
+    <div class="hd"><h3>诊断 / 健康检查</h3><button class="btn small" data-tr data-tip="关闭" onclick="closeModal('diagMask')">✕</button></div>
+    <div class="bd">
+      <div id="diagBody"><div class="empty">检查中…</div></div>
+      <div style="margin-top:14px"><button class="btn small" data-tip="重新检查" onclick="renderDiag()">↻ 重新检查</button></div>
     </div>
   </div>
 </div>
@@ -507,12 +557,12 @@ function renderPersonal(a){
 async function addWord(){
   const t=document.getElementById('wordInput').value.trim(); if(!t||!curDetail) return;
   const r=await api('/api/accounts/'+encodeURIComponent(curDetail.user_id)+'/word',{method:'POST',body:JSON.stringify({term:t})});
-  if(r.status==='OK'){ toast('已添加'); document.getElementById('wordInput').value=''; const d=await api('/api/accounts/'+encodeURIComponent(curDetail.user_id)+'/dictionary'); curWords=d.data?.words||[]; renderDict(); } else toast('失败');
+  if(r.status==='OK'){ toast('已添加'); document.getElementById('wordInput').value=''; const d=await api('/api/accounts/'+encodeURIComponent(curDetail.user_id)+'/dictionary'); curWords=d.data?.words||[]; renderDict(); } else toast('添加失败: '+(r.msg||'未知原因'));
 }
 async function delWord(term){
   if(!curDetail) return; if(!confirm('删除「'+term+'」?')) return;
   const r=await api('/api/accounts/'+encodeURIComponent(curDetail.user_id)+'/word?term='+encodeURIComponent(term),{method:'DELETE'});
-  if(r.status==='OK'){ toast('已删除'); curWords=curWords.filter(w=>w.term!==term); renderDict(); } else toast('失败');
+  if(r.status==='OK'){ toast('已删除'); curWords=curWords.filter(w=>w.term!==term); renderDict(); } else toast('删除失败: '+(r.msg||'未知原因'));
 }
 async function syncOne(){
   if(!curDetail) return; toast('同步中…');
@@ -616,7 +666,7 @@ async function saveAccount(){
     captured_at:d.captured_at,
     user_info:d.user_info
   })});
-  if(r.status!=='OK'){ toast('保存失败'); return; }
+  if(r.status!=='OK'){ toast('保存失败: '+(r.msg||'未知原因')); return; }
   closeModal('addMask'); toast('已保存,正在迁移主词库到此号…');
   // 自动迁移:把主词库导入新账号
   const m=await api('/api/accounts/'+encodeURIComponent(d.user_id)+'/import-master',{method:'POST'});
@@ -634,8 +684,93 @@ async function saveMaster(){
   const terms=document.getElementById('masterArea').value.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
   const r=await api('/api/master',{method:'POST',body:JSON.stringify({terms})});
   if(r.status==='OK'){ document.getElementById('masterArea').value=r.data.join('\n'); document.getElementById('masterCnt').textContent=r.data.length+' 条'; toast('已保存'); loadBackupStatus(); }
+  else toast('保存失败: '+(r.msg||'未知原因'));
 }
 
+function openDiag(){ openModal('diagMask'); renderDiag(); }
+const diagSleep=ms=>new Promise(r=>setTimeout(r,ms));
+function diagRow(dot,k,v,vcls){ return `<div class="diag-row in"><span class="ddot ${dot}"></span><span class="dk">${k}</span><span class="dv ${vcls||''}">${v}</span></div>`; }
+function paywallRowHtml(pw){
+  const reverted = pw.exists && pw.has_backup && !pw.patched;
+  let dot='neutral', txt='未打补丁', cls='mut';
+  if(pw.error){ dot='warn'; txt=esc(pw.error); cls='warn'; }
+  else if(reverted){ dot='warn'; txt='<span class="warn">已被 Typeless 更新还原，需重打</span>'; cls=''; }
+  else if(pw.patched){ dot='ok'; txt='<b>已打补丁</b>'; cls=''; }
+  return `<div class="diag-row in"><span class="ddot ${dot}"></span><span class="dk">去弹窗补丁</span><span class="dv ${cls}">${txt}</span></div>`;
+}
+let diagRunning=false;
+async function renderDiag(){
+  if(diagRunning) return;            // 防重复触发
+  diagRunning=true;
+  const STEP_MS=380;
+  const el=document.getElementById('diagBody');
+  el.innerHTML='<div class="diag-prog"><div class="diag-prog-bar"><i id="diagBar"></i></div>'
+    +'<div class="diag-prog-txt" id="diagTxt"><span class="spin" id="diagSpin"></span><span id="diagStep">开始体检…</span><span class="cnt" id="diagCnt"></span></div></div>'
+    +'<div id="diagRows"></div>';
+  const bar=document.getElementById('diagBar'), stepEl=document.getElementById('diagStep'),
+        cntEl=document.getElementById('diagCnt'), rowsEl=document.getElementById('diagRows'),
+        txtEl=document.getElementById('diagTxt'), spin=document.getElementById('diagSpin');
+  const r=await api('/api/diagnostics');
+  if(r.status!=='OK'){ el.innerHTML='<div class="empty">'+(r.msg||'检查失败')+'</div>'; diagRunning=false; return; }
+  const d=r.data, t=d.typeless;
+  const cur=(CUR_ID && ACCOUNTS.length)?ACCOUNTS.find(x=>x.user_id===CUR_ID):null;
+  const bk=d.data.backup||{};
+  const steps=[
+    {label:'检查 Typeless 应用', row:()=>diagRow(t.app_found?'ok':'bad','Typeless 应用', t.app_found?`<b>已找到</b> ${esc(t.app_path)}`:'未找到 — 请确认已安装 Typeless', t.app_found?'mut':'bad')},
+    {label:'检查 app.asar', row:()=>diagRow(t.asar_found?'ok':'bad','app.asar', t.asar_found?'已找到':'未找到（去弹窗补丁不可用）', t.asar_found?'mut':'bad')},
+    {label:'检查用户数据目录', row:()=>diagRow(t.user_data_found?'ok':'warn','用户数据目录', t.user_data_found?esc(t.user_data_dir):'未找到', t.user_data_found?'mut':'warn')},
+    {label:'连接调试端口 '+d.cdp.port, row:()=>diagRow(d.cdp.reachable?'ok':'warn','调试端口 '+d.cdp.port, d.cdp.reachable?'<b>已连接</b>':'未连接 — 点「⏻ 启动 Typeless」', d.cdp.reachable?'':'warn')},
+    {label:'确认当前登录账号', row:()=>diagRow(cur?'ok':'neutral','当前登录', cur?`<b>${esc(cur.nickname||cur.email||CUR_ID)}</b>`:(d.cdp.reachable?'以顶部「当前」为准':'未检测到（Typeless 未连接）'), cur?'':'mut')},
+    {label:'读取 app.asar，检查去弹窗补丁（较慢，请稍候）', slow:true, row:async()=>{ let pw={}; try{ const pr=await api('/api/paywall-status'); pw=pr.data||{}; }catch(e){ pw={error:'检查失败'}; } return paywallRowHtml(pw); }},
+    {label:'检查数据目录读写', row:()=>diagRow(d.data.writable?'ok':'bad','数据目录', `${esc(d.data.dir)}${d.data.writable?'':' <span class="bad">（不可写！）</span>'}`, d.data.writable?'mut':'')},
+    {label:'统计已收录账号', row:()=>diagRow('neutral','已收录账号', `<b>${d.data.accounts_count}</b> 个`, '')},
+    {label:'检查运行数据备份', row:()=>diagRow(bk.backed_up?'ok':'warn','运行数据备份', bk.backed_up?'已备份':'有变更，建议「立即备份」', bk.backed_up?'mut':'warn')},
+  ];
+  const N=steps.length;
+  for(let i=0;i<N;i++){
+    stepEl.textContent='正在'+steps[i].label+'…';
+    cntEl.textContent=(i+1)+' / '+N;
+    await diagSleep(steps[i].slow?120:STEP_MS);   // 先亮出“正在做什么”，再出结果
+    const html=await steps[i].row();
+    rowsEl.insertAdjacentHTML('beforeend', html);
+    bar.style.width=Math.round((i+1)/N*100)+'%';
+    if(!steps[i].slow) await diagSleep(90);
+  }
+  spin.style.display='none';
+  txtEl.classList.add('done');
+  stepEl.textContent='✓ 体检完成';
+  cntEl.textContent=N+' / '+N;
+  diagRunning=false;
+}
+// 开机自动检测:统一进度条,一步一步走,让用户看清正在做什么
+async function bootDetect(){
+  const b=document.getElementById('patchBanner');
+  b.className='banner boot'; b.style.display='flex';
+  b.innerHTML='<div class="boot-bar"><i id="bootBar"></i></div>'
+    +'<div class="boot-txt"><span class="spin"></span><span class="boot-step" id="bootStep">开始检测…</span><span class="cnt" id="bootCnt">0 / 4</span></div>';
+  const bar=()=>document.getElementById('bootBar'), stepEl=()=>document.getElementById('bootStep'), cntEl=()=>document.getElementById('bootCnt');
+  let pw=null;
+  const steps=[
+    {label:'加载账号列表与用量', run:loadAccounts},
+    {label:'检测当前登录账号（连接 Typeless，较慢）', run:detectCurrent},
+    {label:'自检去弹窗补丁（读取 app.asar，较慢）', run:async()=>{ try{ const r=await api('/api/paywall-status'); pw=r.data||{}; }catch(e){ pw={error:1}; } }},
+  ];
+  const N=steps.length, TOTAL=N+1;   // 3 项检查 + 第 4 步“全部填满 = 检查完成”
+  for(let i=0;i<N;i++){
+    stepEl().textContent='正在'+steps[i].label+'…'; cntEl().textContent=(i+1)+' / '+TOTAL;
+    try{ await Promise.all([ steps[i].run(), diagSleep(320) ]); }catch(e){}
+    bar().style.width=Math.round((i+1)/TOTAL*100)+'%';   // 25 → 50 → 75
+  }
+  const reverted = pw && pw.exists && pw.has_backup && !pw.patched;
+  if(reverted){
+    b.className='banner warn'; b.style.display='flex';
+    b.innerHTML='<span>⚠ 去弹窗补丁已被 Typeless 更新还原 — 点「⊘ 解除弹窗提示」可重打</span><span class="x" data-tip="忽略" onclick="this.parentElement.style.display=\'none\'">✕</span>';
+  }else{
+    b.className='banner boot done'; b.style.display='flex';   // 第 4 步:填满 100%
+    b.innerHTML='<div class="boot-bar"><i style="width:100%"></i></div><div class="boot-txt"><span class="boot-step">✓ 检查完成</span><span class="cnt">'+TOTAL+' / '+TOTAL+'</span></div>';
+    setTimeout(()=>{ if(b.classList.contains('done')) b.style.display='none'; }, 2200);
+  }
+}
 async function detectCurrent(){
   const el=document.getElementById('curLink'); el.textContent='检测中…';
   const r=await api('/api/current');
@@ -649,9 +784,7 @@ async function detectCurrent(){
 }
 document.getElementById('curLink').onclick=detectCurrent;
 
-loadAccounts();
-loadBackupStatus();
-detectCurrent();
+bootDetect();
 </script>
 </body>
 </html>
