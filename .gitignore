@@ -2,6 +2,7 @@
 accounts.json
 profiles/
 runtime-backups/
+typeless-version.json
 *.csv
 *.bak
 

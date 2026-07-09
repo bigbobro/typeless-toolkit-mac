@@ -16,12 +16,13 @@ const {
   config, CDP_PORT, ASAR_PATH, MAC_INFO_PLIST,
   readAccounts, writeAccounts,
   backupRuntimeData, runtimeDataStatus, createRuntimeBackupBundle, restoreRuntimeBackupBundle,
-  saveSnapshot, restoreSnapshot, hasSnapshot,
+  saveSnapshot, restoreSnapshot, hasSnapshot, snapshotMtime, tokenExpiryInfo,
   killTypeless, launchTypeless, resetDevice,
   readMaster, writeMaster,
   curlApi, ensureApp, captureTokenCDP,
   liveStatus, syncAccount,
   paywallStatus, patchPaywall,
+  getTypelessVersion, versionDriftStatus, writeVersionState,
   accountMetaFromUserInfo,
   termKey,
   log, sleep,
@@ -56,7 +57,11 @@ const server = http.createServer(async (req, res) => {
     if (m === 'GET' && p === '/api/accounts') {
       const accs = readAccounts();
       const live = await Promise.all(accs.map(a => liveStatus(a).catch(e => ({ token_valid: false, _err: e.message }))));
-      const data = accs.map((a, i) => ({ ...a, live: live[i], has_snapshot: hasSnapshot(a.user_id) }));
+      const data = accs.map((a, i) => ({
+        ...a, live: live[i], has_snapshot: hasSnapshot(a.user_id),
+        snapshot_mtime: hasSnapshot(a.user_id) ? snapshotMtime(a.user_id) : null,
+        ...tokenExpiryInfo(a.token),
+      }));
       return send(res, 200, { status: 'OK', data });
     }
     // 本地运行数据备份状态(accounts/profile/主词库)
@@ -150,6 +155,16 @@ const server = http.createServer(async (req, res) => {
     // 查询去弹窗补丁状态(只读)
     if (m === 'GET' && p === '/api/paywall-status') {
       return send(res, 200, { status: 'OK', data: paywallStatus() });
+    }
+    // Typeless 版本漂移状态(只读:当前版本 vs 上次见过的版本)
+    if (m === 'GET' && p === '/api/version-status') {
+      return send(res, 200, { status: 'OK', data: versionDriftStatus() });
+    }
+    // 确认已复验:把当前 Typeless 版本记为新基线,之后不再提示此版本
+    if (m === 'POST' && p === '/api/version-ack') {
+      const cur = getTypelessVersion();
+      if (cur) writeVersionState(cur);
+      return send(res, 200, { status: 'OK', data: versionDriftStatus() });
     }
     // 诊断 / 健康检查(只读聚合:路径/端口/登录/补丁状态/数据目录)
     if (m === 'GET' && p === '/api/diagnostics') {
@@ -263,6 +278,17 @@ const server = http.createServer(async (req, res) => {
         catch (e) { results.push({ user_id: a.user_id, nickname: a.nickname, error: e.message }); }
       }
       return send(res, 200, { status: 'OK', data: results });
+    }
+    // 给账号批量加词(多行,复用 bulk-import)
+    if (m === 'POST' && p.startsWith('/api/accounts/') && p.endsWith('/words')) {
+      const id = decodeURIComponent(p.split('/')[3]);
+      const acc = readAccounts().find(x => x.user_id === id);
+      if (!acc) return send(res, 404, { status: 'FAIL', msg: '账号不存在' });
+      const b = await readBody(req);
+      const terms = Array.isArray(b.terms) ? b.terms.map(s => String(s || '').trim()).filter(Boolean) : [];
+      if (!terms.length) return send(res, 400, { status: 'FAIL', msg: '没有可添加的词' });
+      const r = await curlApi('POST', '/user/dictionary/bulk-import', acc.token, { content: terms.join('\n') });
+      return send(res, 200, { status: 'OK', data: { requested: terms.length, imported: r.data?.success_count ?? 0 } });
     }
     // 给账号加单个词
     if (m === 'POST' && p.startsWith('/api/accounts/') && p.endsWith('/word')) {

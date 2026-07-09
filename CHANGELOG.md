@@ -1,5 +1,29 @@
 # Changelog
 
+## macos-v2.2.0 - 2026-07-09
+
+### Added
+
+- Show each account's remaining token validity ("token 剩余 N 天") on its card, decoded from the JWT `exp` claim; warns amber under 30 days and red once expired.
+- Show snapshot freshness ("快照已存 · N 天前") next to the existing 快照已存/未存快照 label.
+- Support batch word add: a "批量" toggle in the dictionary tab reveals a multi-line textarea that submits through the same `bulk-import` API the sync features already use, via a new `POST /api/accounts/:id/words` route.
+- Replace 「全部同步」's single summary toast with a step-by-step results panel (reusing the 诊断 panel's progress-bar/row style), showing each account's exported/imported/master counts or error as it completes.
+- Add Typeless version-drift detection: record the last-seen `CFBundleShortVersionString` and, when Typeless auto-updates to a new version, surface a top banner warning that capabilities coupled to the app internals (token capture / paywall patch / path detection) may need re-verifying. Detection and warning only — nothing is re-run automatically. Clicking 知道了 records the new version as baseline (`GET /api/version-status`, `POST /api/version-ack`, state in gitignored `typeless-version.json`).
+
+### Changed
+
+- Replace every native `confirm()` (切号/重置设备/打补丁/删词/移除账号/导出导入备份) with an in-theme confirm modal; message text is unchanged, only the chrome changed. Esc and backdrop-click both resolve as Cancel.
+- Replace `copyFrom()`'s native `prompt()` (type the nickname) with a modal dropdown listing the other accounts.
+- Disable the relevant buttons (切换到此号/解除设备限制/解除弹窗提示/全部同步/同步本账号) while one of them is running, so double-clicks can't overlap the kill→restore→launch sequence or run two syncs at once.
+- Toasts now carry a success/failure border color instead of being visually identical either way.
+- All open modals close on Esc, not just backdrop click.
+- Reserve space so the floating boot-status pill doesn't overlap the header subtitle when it wraps to two lines; below 760px viewport width the pill drops back into normal document flow beneath the title instead of floating.
+
+### Notes
+
+- Backend additions are additive only: `/api/accounts` now also returns `snapshot_mtime` / `token_expires_at` / `token_days_left`; the new `/words` and `/api/version-*` routes are new endpoints; no existing route's behavior changed.
+- Added `test/token-expiry.test.js` (5 tests, JWT decode + expiry math) and `test/version-drift.test.js` (6 tests, drift comparison + version-state round-trip); full suite is 23 tests.
+
 ## macos-v2.1.1 - 2026-07-09
 
 ### Changed
