@@ -1,5 +1,13 @@
 # Changelog
 
+## macos-v2.1.1 - 2026-07-09
+
+### Changed
+
+- Move the on-open boot detection into a floating status pill pinned to the header's empty top-right, so its progress → done → fade no longer reflows the page (previously the in-flow progress bar shifted the content below when it appeared and collapsed).
+- Stop showing the current login three times: the ephemeral "当前 Typeless 登录" confirmation now floats and fades, while the persistent `当前:` chip and the highlighted account card stay the single source of truth. The 未收录 case still shows a persistent in-flow banner to guide 添加当前账号.
+- When a Typeless auto-update has reverted the 去弹窗补丁, the boot pill fades out without flashing "✓ 检查完成"; only the persistent warning banner remains.
+
 ## macos-v2.1.0 - 2026-07-09
 
 ### Added

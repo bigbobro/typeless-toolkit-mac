@@ -17,7 +17,7 @@
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--ink); font-family:var(--mono); -webkit-font-smoothing:antialiased; }
   .wrap { max-width:1180px; margin:0 auto; padding:24px 20px 60px; }
-  header { margin-bottom:8px; }
+  header { margin-bottom:8px; position:relative; }
   header h1 { font-size:20px; font-weight:700; margin:0; letter-spacing:-.01em; }
   header .sub { color:var(--mut); font-size:13px; margin-top:6px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
 
@@ -182,12 +182,15 @@
   .spin { width:13px; height:13px; flex:none; border:2px solid rgba(14,124,91,.25); border-top-color:var(--grn-d); border-radius:50%; animation:spin .7s linear infinite; }
   @keyframes spin { to { transform:rotate(360deg); } }
   /* 开机自动检测进度条 */
-  .banner.boot { flex-direction:column; align-items:stretch; justify-content:center; gap:8px; min-height:52px; background:var(--grn-t); border-color:var(--grn-line); color:var(--grn-d); }
   .boot-bar { height:6px; background:rgba(14,124,91,.16); border-radius:5px; overflow:hidden; }
   .boot-bar > i { display:block; height:100%; width:0; background:var(--grn-d); border-radius:5px; transition:width .35s ease; }
   .boot-txt { display:flex; align-items:center; gap:8px; font-size:12.5px; white-space:nowrap; }
   .boot-txt .boot-step { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; }
   .boot-txt .cnt { flex:none; font-variant-numeric:tabular-nums; opacity:.65; }
+  /* 右上浮层:只放“一次性反馈”(开机进度 / 已收录登录确认),绝对定位、淡入淡出,出现或消失都不推挤下方容器 */
+  .hstat { position:absolute; top:2px; right:0; max-width:340px; box-sizing:border-box; background:var(--grn-t); border:1px solid var(--grn-line); color:var(--grn-d); border-radius:9px; padding:8px 12px; font-size:12.5px; opacity:0; transition:opacity .25s; pointer-events:none; z-index:5; }
+  .hstat.on { opacity:1; }
+  .hstat .boot-bar { margin-top:7px; }
   /* 诊断面板 */
   .diag-row { display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px dashed var(--line); font-size:13px; }
   .diag-row:last-child { border:none; }
@@ -222,6 +225,7 @@
       <h1>Typeless 多账号管理</h1>
       <div class="sub">周额度 8,000 字/号 · 词库跨账号同步 · <button class="chip" id="curLink" data-tip="检测当前 Typeless 正登录哪个账号，并在下方高亮">检测当前登录账号</button></div>
     </div>
+    <div class="hstat" id="hstat"></div>
   </header>
 
   <div class="banner warn" id="patchBanner"></div>
@@ -743,46 +747,71 @@ async function renderDiag(){
   diagRunning=false;
 }
 // 开机自动检测:统一进度条,一步一步走,让用户看清正在做什么
+let _hstatT;
+// 右上浮层:只显示“一次性反馈”(开机进度 / 已收录登录确认);绝对定位,淡入淡出,不占文档流、不推挤下方
+function hstatShow(html, fadeMs){
+  const f=document.getElementById('hstat');
+  clearTimeout(_hstatT);
+  f.innerHTML=html; f.className='hstat on';
+  if(fadeMs) _hstatT=setTimeout(()=>{ f.className='hstat'; }, fadeMs);
+}
 async function bootDetect(){
-  const b=document.getElementById('patchBanner');
-  b.className='banner boot'; b.style.display='flex';
-  b.innerHTML='<div class="boot-bar"><i id="bootBar"></i></div>'
-    +'<div class="boot-txt"><span class="spin"></span><span class="boot-step" id="bootStep">开始检测…</span><span class="cnt" id="bootCnt">0 / 4</span></div>';
+  const f=document.getElementById('hstat');
+  clearTimeout(_hstatT);
+  f.innerHTML='<div class="boot-txt"><span class="spin"></span><span class="boot-step" id="bootStep">开始检测…</span><span class="cnt" id="bootCnt">0 / 4</span></div>'
+    +'<div class="boot-bar"><i id="bootBar"></i></div>';
+  f.className='hstat on';
   const bar=()=>document.getElementById('bootBar'), stepEl=()=>document.getElementById('bootStep'), cntEl=()=>document.getElementById('bootCnt');
   let pw=null;
   const steps=[
     {label:'加载账号列表与用量', run:loadAccounts},
-    {label:'检测当前登录账号（连接 Typeless，较慢）', run:detectCurrent},
+    {label:'检测当前登录账号（连接 Typeless，较慢）', run:()=>detectCurrent(true)},   // 开机内:静默更新状态,浮层归开机进度独占
     {label:'自检去弹窗补丁（读取 app.asar，较慢）', run:async()=>{ try{ const r=await api('/api/paywall-status'); pw=r.data||{}; }catch(e){ pw={error:1}; } }},
   ];
   const N=steps.length, TOTAL=N+1;   // 3 项检查 + 第 4 步“全部填满 = 检查完成”
   for(let i=0;i<N;i++){
-    stepEl().textContent='正在'+steps[i].label+'…'; cntEl().textContent=(i+1)+' / '+TOTAL;
+    const se=stepEl(), ce=cntEl();
+    if(se) se.textContent='正在'+steps[i].label+'…';
+    if(ce) ce.textContent=(i+1)+' / '+TOTAL;
     try{ await Promise.all([ steps[i].run(), diagSleep(320) ]); }catch(e){}
-    bar().style.width=Math.round((i+1)/TOTAL*100)+'%';   // 25 → 50 → 75
+    const be=bar(); if(be) be.style.width=Math.round((i+1)/TOTAL*100)+'%';   // 25 → 50 → 75
   }
   const reverted = pw && pw.exists && pw.has_backup && !pw.patched;
   if(reverted){
+    // 补丁被 Typeless 更新还原:进度浮层直接淡出,不再闪「✓ 检查完成」;告警条常驻,留在文档流占位显眼
+    clearTimeout(_hstatT); f.className='hstat';
+    const b=document.getElementById('patchBanner');
     b.className='banner warn'; b.style.display='flex';
     b.innerHTML='<span>⚠ 去弹窗补丁已被 Typeless 更新还原 — 点「⊘ 解除弹窗提示」可重打</span><span class="x" data-tip="忽略" onclick="this.parentElement.style.display=\'none\'">✕</span>';
   }else{
-    b.className='banner boot done'; b.style.display='flex';   // 第 4 步:填满 100%
-    b.innerHTML='<div class="boot-bar"><i style="width:100%"></i></div><div class="boot-txt"><span class="boot-step">✓ 检查完成</span><span class="cnt">'+TOTAL+' / '+TOTAL+'</span></div>';
-    setTimeout(()=>{ if(b.classList.contains('done')) b.style.display='none'; }, 2200);
+    // 完成:填满 → ✓ → 2.2s 后淡出(绝对定位,淡出不回流)
+    hstatShow('<div class="boot-txt"><span class="boot-step">✓ 检查完成</span><span class="cnt">'+TOTAL+' / '+TOTAL+'</span></div>'
+      +'<div class="boot-bar"><i style="width:100%"></i></div>', 2200);
   }
 }
-async function detectCurrent(){
+async function detectCurrent(fromBoot){
   const el=document.getElementById('curLink'); el.textContent='检测中…';
   const r=await api('/api/current');
   if(r.status!=='OK'){ el.textContent='未连接 Typeless'; el.style.opacity='.55'; toast('Typeless 未连接,点「⏻ 启动 Typeless」即可(自动带端口)'); return; }
   const d=r.data; CUR_ID=d.user_id;
   const matched=ACCOUNTS.find(x=>x.user_id===d.user_id);
   const b=document.getElementById('banner');
-  b.style.display='block'; b.textContent='当前 Typeless 登录: '+(matched?matched.nickname+' ('+matched.email+')':d.email||d.user_id)+(matched?'':'  — 未收录,点「添加当前账号」加入');
+  if(matched){
+    // 已收录:卡片高亮 + 顶部胶囊已表明当前账号。收起未收录横幅;非开机场景在右上浮层做一次淡出确认(nickname==email 不重复括号)
+    b.style.display='none';
+    if(!fromBoot){
+      const label=matched.nickname===matched.email?matched.nickname:matched.nickname+' ('+matched.email+')';
+      hstatShow('<div class="boot-txt"><span class="boot-step">✓ 当前 Typeless 登录: '+esc(label)+'</span></div>', 2600);
+    }
+  }else{
+    // 未收录:横幅是唯一能说清并引导「添加当前账号」的地方,常驻(留在文档流占位显眼)
+    b.textContent='当前 Typeless 登录: '+(d.email||d.user_id)+'  — 未收录,点「添加当前账号」加入';
+    b.style.display='block';
+  }
   el.textContent=matched?('当前: '+matched.nickname):'检测当前登录账号';
   render();
 }
-document.getElementById('curLink').onclick=detectCurrent;
+document.getElementById('curLink').onclick=()=>detectCurrent();
 
 bootDetect();
 </script>
