@@ -1,5 +1,41 @@
 # Changelog
 
+## macos-v2.3.0 - 2026-07-10
+
+### Security
+
+- Protect every local `/api/*` request except the product-specific health check with a random per-process session secret injected into the manager page; reject non-loopback Host, mismatched Origin, and cross-site Fetch Metadata requests.
+- Remove wildcard CORS, add no-store / anti-framing / nosniff security headers, and make the launcher identify the manager through a public product-specific `/api/health` response.
+- Stop returning account tokens from `/api/accounts`, `/api/current`, and `/api/capture`. Captured credentials now stay on the backend behind a short-lived, single-use `capture_id`.
+- Parse JSON strictly with content-type and size limits; malformed JSON now returns 400 instead of silently becoming `{}` and potentially clearing the master dictionary.
+- Require object-shaped JSON for object APIs, returning `400 INVALID_INPUT` for `null`, arrays, and scalars instead of leaking `TypeError` as 500.
+- Deep-whitelist live usage and personalization DTOs before they reach the browser, dropping unknown nested fields and normalizing non-finite numbers.
+- Whitelist dictionary rows and normalize every remote count before rendering; word mutation endpoints no longer pass upstream response objects through to the browser.
+- Return 400 for malformed HTTP request targets without terminating the manager process.
+- Remove dynamic inline event strings for account IDs and dictionary terms, expand HTML escaping, and validate account IDs before they become profile paths.
+
+### Changed
+
+- Move the default runtime data root to `~/Library/Application Support/Typeless Toolkit/` while preserving `TYPELESS_DATA_DIR` as an explicit portable/test override.
+- On first start, copy legacy accounts, profiles, runtime backups, master CSV, local config, version state, and account backups through a verified staging migration. Preserve the source, fail closed on conflicts, and mark completed migration idempotently.
+- Create an immediate `post-migration` runtime backup in the stable vault so the migrated generation starts in a visibly protected state.
+- If the first launch came from an empty fresh folder, allow a later launch from the real legacy folder to complete migration while the stable vault is still empty; once the vault has imported or newly created user data, it remains authoritative.
+- Enforce `0700` on runtime directories and `0600` on credential/profile/backup files, including the retained legacy recovery copy.
+- Replace fixed `app.asar.bak` / `Info.plist.bak` rollback with versioned patch transactions under `patch-backups/`. Each transaction verifies its before-image, atomically replaces candidates, validates plist integrity and codesign, and restores only its own backup on failure.
+- Persist `committing` before the first live patch write and recover interrupted patch transactions during the next manager start. Prepared transactions fail closed if Typeless updated the live files, and manifest-write failures no longer hide the verified/failed rollback result.
+- Remove the duplicate route-level patch restore. A rollback verification failure is now reported as `recovery_required` instead of claiming recovery succeeded.
+- Publish runtime backups only after staging, per-file SHA-256 verification, and a complete manifest; incomplete or legacy unverified directories no longer produce a false “已备份” state.
+- Restore imported backup bundles as a journaled runtime-data generation. Invalid base64, duplicate paths, and path conflicts are rejected before commit; exceptions and process interruption restore the prior accounts/master/profiles generation on the next startup.
+- Rename the ambiguous "启动 Typeless" action to "连接 Typeless" and separate management-connection state from account/API availability. Connecting now shows progress, automatically re-detects the current account, and restores the chip/button state without a manual refresh.
+- Make CDP startup fail explicitly after its timeout instead of returning a false "ready" response; the standalone debug launcher now uses the same verified restart-and-connect flow.
+- Treat a CDP endpoint as Typeless only when it exposes the main window from the configured `app.asar`; remove the arbitrary-page fallback and bound HTTP, WebSocket, and command waits.
+
+### Tests
+
+- Add local API guard tests, a real loopback manager security integration test, runtime migration/permission/conflict tests, and patch transaction fault-injection tests.
+- Add deep DTO, object-body, management-connection, CDP timeout, backup staging, restore-journal, crash-recovery, and manifest-failure regression tests.
+- Full zero-dependency suite now contains 78 tests.
+
 ## macos-v2.2.0 - 2026-07-09
 
 ### Added

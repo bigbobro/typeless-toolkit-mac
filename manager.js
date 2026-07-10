@@ -9,9 +9,15 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const crypto = require('crypto');
 
 const C = require('./lib/common');
+const {
+  LocalApiError,
+  applySecurityHeaders,
+  createLocalApiSecurity,
+  readJsonBody,
+} = require('./lib/local-api-security');
 const {
   config, CDP_PORT, ASAR_PATH, MAC_INFO_PLIST,
   readAccounts, writeAccounts,
@@ -19,46 +25,171 @@ const {
   saveSnapshot, restoreSnapshot, hasSnapshot, snapshotMtime, tokenExpiryInfo,
   killTypeless, launchTypeless, resetDevice,
   readMaster, writeMaster,
-  curlApi, ensureApp, captureTokenCDP,
+  curlApi, typelessConnectionStatus, ensureApp, captureTokenCDP,
   liveStatus, syncAccount,
   paywallStatus, patchPaywall,
   getTypelessVersion, versionDriftStatus, writeVersionState,
   accountMetaFromUserInfo,
-  termKey,
+  termKey, safeCount, assertSafeAccountId,
   log, sleep,
 } = C;
 
 const PORT = config.manager_port;
+const security = createLocalApiSecurity({ port: PORT });
+const pendingCaptures = new Map();
+const CAPTURE_TTL_MS = 2 * 60 * 1000;
 
 // ---------- HTTP ----------
 function send(res, code, obj) {
-  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+  applySecurityHeaders(res);
+  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(obj));
 }
-function readBody(req) {
-  return new Promise(r => {
-    let b = '';
-    req.on('data', d => b += d);
-    req.on('end', () => { try { r(JSON.parse(b || '{}')); } catch (e) { r({}); } });
-  });
+
+function readBody(req, limitBytes) {
+  return limitBytes
+    ? readJsonBody(req, { limitBytes })
+    : security.readJson(req);
+}
+
+async function readObjectBody(req, limitBytes) {
+  const body = await readBody(req, limitBytes);
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    throw new LocalApiError(400, 'INVALID_INPUT', 'JSON 顶层必须是对象');
+  }
+  return body;
+}
+
+function boundedText(value, max, field) {
+  const text = String(value || '').trim();
+  if (text.length > max) throw new LocalApiError(400, 'INVALID_INPUT', `${field} 过长`);
+  return text;
+}
+
+function publicAccount(account, extra = {}) {
+  const view = {
+    user_id: account.user_id,
+    nickname: account.nickname || '',
+    email: account.email || '',
+    role: account.role || '',
+    captured_at: account.captured_at || null,
+    added_at: account.added_at || null,
+  };
+  for (const key of [
+    'live', 'has_snapshot', 'snapshot_mtime', 'token_expires_at', 'token_days_left',
+  ]) {
+    if (Object.hasOwn(extra, key)) view[key] = extra[key];
+  }
+  return view;
+}
+
+function publicLiveStatus(live = {}) {
+  const source = live && typeof live === 'object' && !Array.isArray(live) ? live : {};
+  const usageSource = source.usage && typeof source.usage === 'object' && !Array.isArray(source.usage)
+    ? source.usage
+    : null;
+  const personalSource = source.personal && typeof source.personal === 'object' && !Array.isArray(source.personal)
+    ? source.personal
+    : null;
+  const usage = usageSource ? {
+    week_word_usage_value: Number.isFinite(usageSource.week_word_usage_value) ? usageSource.week_word_usage_value : null,
+    week_word_usage_limit: Number.isFinite(usageSource.week_word_usage_limit) ? usageSource.week_word_usage_limit : null,
+    total_words: Number.isFinite(usageSource.total_words) ? usageSource.total_words : null,
+    total_audio_seconds: Number.isFinite(usageSource.total_audio_seconds) ? usageSource.total_audio_seconds : null,
+    mins_saved: Number.isFinite(usageSource.mins_saved) ? usageSource.mins_saved : null,
+    avg_wpm: Number.isFinite(usageSource.avg_wpm) ? usageSource.avg_wpm : null,
+  } : null;
+  const personal = personalSource ? {
+    total_learning_ratio: Number.isFinite(personalSource.total_learning_ratio)
+      ? personalSource.total_learning_ratio
+      : null,
+    enabled: personalSource.enabled === true,
+    category_count: Number.isFinite(personalSource.category_count)
+      ? personalSource.category_count
+      : (Array.isArray(personalSource.category_stats) ? personalSource.category_stats.length : null),
+  } : null;
+  return {
+    token_valid: source.token_valid !== false,
+    usage,
+    personal,
+    dict_count: Number.isFinite(source.dict_count) ? source.dict_count : 0,
+    ...(source._err ? { error: String(source._err).slice(0, 300) } : {}),
+  };
+}
+
+function publicDictionary(data = {}) {
+  const words = Array.isArray(data?.words) ? data.words : [];
+  return {
+    words: words
+      .filter(word => word && typeof word === 'object' && !Array.isArray(word))
+      .map(word => ({
+        term: typeof word.term === 'string' ? word.term : '',
+        auto: word.auto === true,
+      }))
+      .filter(word => word.term),
+  };
+}
+
+function publicCapture(capture, captureId) {
+  return {
+    ...(captureId ? { capture_id: captureId } : {}),
+    user_id: capture.user_id,
+    nickname: capture.nickname || '',
+    email: capture.email || '',
+    role: capture.role || '',
+    captured_at: capture.captured_at || null,
+  };
+}
+
+function putPendingCapture(capture) {
+  const now = Date.now();
+  for (const [id, item] of pendingCaptures) {
+    if (item.expiresAt <= now) pendingCaptures.delete(id);
+  }
+  const id = crypto.randomBytes(18).toString('base64url');
+  pendingCaptures.set(id, { capture, expiresAt: now + CAPTURE_TTL_MS });
+  return id;
+}
+
+function takePendingCapture(id, consume = false) {
+  const item = pendingCaptures.get(String(id || ''));
+  if (!item || item.expiresAt <= Date.now()) {
+    if (item) pendingCaptures.delete(String(id));
+    throw new LocalApiError(400, 'CAPTURE_EXPIRED', '账号抓取结果已过期,请重新抓取');
+  }
+  if (consume) pendingCaptures.delete(String(id));
+  return item.capture;
 }
 
 const server = http.createServer(async (req, res) => {
-  const u = new URL(req.url, `http://localhost:${PORT}`);
-  const p = u.pathname; const m = req.method;
   try {
+    let u;
+    try { u = new URL(req.url, `http://localhost:${PORT}`); }
+    catch (_) { throw new LocalApiError(400, 'INVALID_REQUEST_TARGET', '请求路径无效'); }
+    const p = u.pathname; const m = req.method;
+    if (m === 'GET' && p === '/api/health') {
+      security.assertPageRequest(req);
+      return send(res, 200, {
+        status: 'OK',
+        data: { product: 'typeless-toolkit-manager', state: 'ready', version: '2.3.0' },
+      });
+    }
     // 前端首页
     if (m === 'GET' && (p === '/' || p === '/index.html' || p === '/manager.html')) {
-      const html = fs.readFileSync(path.join(C.CODE_DIR, 'manager.html'), 'utf8');
+      security.assertPageRequest(req);
+      const html = security.injectHtml(fs.readFileSync(path.join(C.CODE_DIR, 'manager.html'), 'utf8'));
+      applySecurityHeaders(res);
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       return res.end(html);
     }
+    if (p.startsWith('/api/')) security.assertApiRequest(req);
     // 账号列表(含实时状态)
     if (m === 'GET' && p === '/api/accounts') {
       const accs = readAccounts();
       const live = await Promise.all(accs.map(a => liveStatus(a).catch(e => ({ token_valid: false, _err: e.message }))));
-      const data = accs.map((a, i) => ({
-        ...a, live: live[i], has_snapshot: hasSnapshot(a.user_id),
+      const data = accs.map((a, i) => publicAccount(a, {
+        live: publicLiveStatus(live[i]),
+        has_snapshot: hasSnapshot(a.user_id),
         snapshot_mtime: hasSnapshot(a.user_id) ? snapshotMtime(a.user_id) : null,
         ...tokenExpiryInfo(a.token),
       }));
@@ -83,6 +214,7 @@ const server = http.createServer(async (req, res) => {
       const bundle = createRuntimeBackupBundle();
       const body = JSON.stringify(bundle, null, 2);
       const filename = `typeless-toolkit-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      applySecurityHeaders(res);
       res.writeHead(200, {
         'Content-Type': 'application/json; charset=utf-8',
         'Content-Disposition': `attachment; filename="${filename}"`,
@@ -91,45 +223,75 @@ const server = http.createServer(async (req, res) => {
     }
     // 从备份包恢复运行数据
     if (m === 'POST' && p === '/api/backup-restore') {
-      const b = await readBody(req);
+      const b = await readObjectBody(req, 128 * 1024 * 1024);
       const result = restoreRuntimeBackupBundle(b.bundle || b);
       return send(res, 200, { status: 'OK', msg: '备份已恢复', data: { ...result, ...runtimeDataStatus() } });
     }
-    // 当前登录账号探测(不保存,不重启 Typeless:autoRestart=false,端口不通就报未连接)
+    // 当前登录账号探测(不保存、不自动重启 Typeless;端口不通时返回结构化管理连接状态)
     if (m === 'GET' && p === '/api/current') {
-      try { const c = await captureTokenCDP(null, false); return send(res, 200, { status: 'OK', data: c }); }
-      catch (e) { return send(res, 200, { status: 'FAIL', msg: e.message }); }
+      const connection = await typelessConnectionStatus();
+      if (!connection.cdp_reachable) {
+        return send(res, 200, {
+          status: 'FAIL',
+          code: 'MANAGEMENT_CONNECTION_REQUIRED',
+          msg: 'Typeless 管理连接未开启',
+          data: connection,
+        });
+      }
+      try {
+        const c = await captureTokenCDP(null, false);
+        return send(res, 200, { status: 'OK', data: publicCapture(c) });
+      }
+      catch (e) {
+        const latest = await typelessConnectionStatus();
+        return send(res, 200, {
+          status: 'FAIL',
+          code: latest.cdp_reachable ? 'CURRENT_ACCOUNT_UNAVAILABLE' : 'MANAGEMENT_CONNECTION_REQUIRED',
+          msg: latest.cdp_reachable ? e.message : 'Typeless 管理连接已断开',
+          data: latest,
+        });
+      }
     }
     // 抓取当前账号(准备添加)
     if (m === 'POST' && p === '/api/capture') {
-      try { const c = await captureTokenCDP(); return send(res, 200, { status: 'OK', data: c }); }
+      try {
+        const c = await captureTokenCDP();
+        if (!c.user_id || !c.token) throw new Error('抓取结果缺少账号标识或 token');
+        const captureId = putPendingCapture(c);
+        return send(res, 200, { status: 'OK', data: publicCapture(c, captureId) });
+      }
       catch (e) { return send(res, 500, { status: 'FAIL', msg: e.message }); }
     }
     // 保存账号
     if (m === 'POST' && p === '/api/accounts') {
-      const b = await readBody(req);
-      if (!b.user_id || !b.token) return send(res, 400, { status: 'FAIL', msg: '缺少 user_id 或 token,请重新添加当前账号' });
-      let meta = accountMetaFromUserInfo(b.user_info, b.user_id);
-      if ((!b.email || !b.nickname || !b.role) && b.token) {
+      const b = await readObjectBody(req);
+      if (!b.capture_id) return send(res, 400, { status: 'FAIL', msg: '账号抓取结果缺失,请重新抓取' });
+      const captured = takePendingCapture(b.capture_id);
+      assertSafeAccountId(captured.user_id);
+      let meta = accountMetaFromUserInfo(captured.user_info, captured.user_id);
+      if ((!captured.email || !captured.nickname || !captured.role) && captured.token) {
         try {
-          const ui = await curlApi('GET', '/user/get_user_info', b.token);
-          meta = accountMetaFromUserInfo(ui.data || b.user_info, b.user_id);
+          const ui = await curlApi('GET', '/user/get_user_info', captured.token);
+          meta = accountMetaFromUserInfo(ui.data || captured.user_info, captured.user_id);
         } catch (e) {}
       }
       const accs = readAccounts();
-      const idx = accs.findIndex(x => x.user_id === b.user_id);
+      const idx = accs.findIndex(x => x.user_id === captured.user_id);
+      const nickname = boundedText(b.nickname, 120, '昵称');
+      const email = boundedText(b.email, 254, '邮箱');
       const rec = {
-        user_id: b.user_id,
-        nickname: b.nickname || b.email || meta.nickname || (b.user_id || '').slice(0, 8),
-        email: b.email || meta.email || '',
-        role: b.role || meta.role || '',
-        token: b.token, captured_at: b.captured_at,
+        user_id: captured.user_id,
+        nickname: nickname || email || meta.nickname || (captured.user_id || '').slice(0, 8),
+        email: email || meta.email || '',
+        role: captured.role || meta.role || '',
+        token: captured.token, captured_at: captured.captured_at,
         added_at: idx >= 0 ? accs[idx].added_at : new Date().toISOString(),
       };
       if (idx >= 0) accs[idx] = rec; else accs.push(rec);
       writeAccounts(accs);
-      saveSnapshot(b.user_id); // 保存登录态快照,供切换账号用
-      return send(res, 200, { status: 'OK', data: rec });
+      saveSnapshot(captured.user_id); // 保存登录态快照,供切换账号用
+      takePendingCapture(b.capture_id, true);
+      return send(res, 200, { status: 'OK', data: publicAccount(rec) });
     }
     // 手动更新当前账号快照(当前 Typeless 登录态 -> 该账号)
     if (m === 'POST' && p.startsWith('/api/accounts/') && p.endsWith('/snapshot')) {
@@ -169,8 +331,7 @@ const server = http.createServer(async (req, res) => {
     // 诊断 / 健康检查(只读聚合:路径/端口/登录/补丁状态/数据目录)
     if (m === 'GET' && p === '/api/diagnostics') {
       const ex = (x) => { try { return !!x && fs.existsSync(x); } catch (e) { return false; } };
-      let cdpReachable = false;
-      try { const rr = await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`); cdpReachable = rr.ok; } catch (e) {}
+      const connection = await typelessConnectionStatus();
       let writable = false; try { fs.accessSync(C.ROOT, fs.constants.W_OK); writable = true; } catch (e) {}
       let accCount = 0; try { accCount = readAccounts().length; } catch (e) {}
       const data = {
@@ -181,9 +342,10 @@ const server = http.createServer(async (req, res) => {
           info_plist: MAC_INFO_PLIST || '', info_plist_found: ex(MAC_INFO_PLIST),
           user_data_dir: C.USERDATA_DIR || '', user_data_found: ex(C.USERDATA_DIR),
         },
-        cdp: { port: CDP_PORT, reachable: cdpReachable },
+        cdp: { port: connection.port, reachable: connection.cdp_reachable, state: connection.state },
         data: {
-          dir: C.ROOT, writable,
+          dir: C.ROOT, code_dir: C.CODE_DIR, writable,
+          migration: C.RUNTIME_DATA.migration,
           accounts_file: C.ACCOUNTS_FILE, accounts_count: accCount,
           profiles_dir: C.PROFILES_DIR, runtime_backups_dir: C.RUNTIME_BACKUPS_DIR,
           backup: runtimeDataStatus(),
@@ -196,16 +358,22 @@ const server = http.createServer(async (req, res) => {
       const dataBackup = backupRuntimeData('patch-paywall');
       killTypeless(); await sleep(1500);
       try {
-        const r = patchPaywall();
+        const r = await patchPaywall();
         if (dataBackup) r.manager_data_backup = dataBackup;
         launchTypeless(); // 重启使补丁生效
         return send(res, 200, { status: 'OK', data: r });
       } catch (e) {
-        // 失败则从备份还原,避免半改导致闪退
-        try { if (fs.existsSync(ASAR_PATH + '.bak')) fs.copyFileSync(ASAR_PATH + '.bak', ASAR_PATH); } catch (_) {}
-        try { if (MAC_INFO_PLIST && fs.existsSync(MAC_INFO_PLIST + '.bak')) fs.copyFileSync(MAC_INFO_PLIST + '.bak', MAC_INFO_PLIST); } catch (_) {}
-        try { if (C.MAC_APP_PATH) execFileSync('codesign', ['--force', '--deep', '--sign', '-', C.MAC_APP_PATH], { stdio: 'ignore' }); } catch (_) {}
-        return send(res, 500, { status: 'FAIL', msg: '打补丁失败:' + e.message + '(已从备份还原)', manager_data_backup: dataBackup });
+        // 文件恢复完全由本次补丁事务负责。只有确认不是 recovery_required 时才重启。
+        if (e.rollback !== 'failed') {
+          try { launchTypeless(); } catch (_) {}
+        }
+        return send(res, 500, {
+          status: 'FAIL',
+          msg: '打补丁失败:' + e.message,
+          recovery_required: e.rollback === 'failed',
+          transaction_id: e.transaction_id || null,
+          manager_data_backup: dataBackup,
+        });
       }
     }
     // 把主词库导入此账号(单向 master -> account,不导出)
@@ -220,7 +388,7 @@ const server = http.createServer(async (req, res) => {
       let imported = 0;
       if (missing.length) {
         const r = await curlApi('POST', '/user/dictionary/bulk-import', acc.token, { content: missing.join('\n') });
-        imported = r.data?.success_count ?? 0;
+        imported = safeCount(r.data?.success_count);
       }
       return send(res, 200, { status: 'OK', data: { master: master.length, already: master.length - missing.length, imported } });
     }
@@ -241,7 +409,7 @@ const server = http.createServer(async (req, res) => {
       let imported = 0;
       if (missing.length) {
         const r = await curlApi('POST', '/user/dictionary/bulk-import', dst.token, { content: missing.join('\n') });
-        imported = r.data?.success_count ?? 0;
+        imported = safeCount(r.data?.success_count);
       }
       return send(res, 200, { status: 'OK', data: { src_count: srcWords.length, imported, already: srcWords.length - missing.length } });
     }
@@ -259,7 +427,7 @@ const server = http.createServer(async (req, res) => {
       const acc = readAccounts().find(x => x.user_id === id);
       if (!acc) return send(res, 404, { status: 'FAIL', msg: '账号不存在' });
       const dl = await curlApi('GET', '/user/dictionary/list?size=500', acc.token);
-      return send(res, 200, { status: 'OK', data: dl.data || { words: [] } });
+      return send(res, 200, { status: 'OK', data: publicDictionary(dl.data) });
     }
     // 单账号同步
     if (m === 'POST' && p.startsWith('/api/accounts/') && p.endsWith('/sync')) {
@@ -284,19 +452,22 @@ const server = http.createServer(async (req, res) => {
       const id = decodeURIComponent(p.split('/')[3]);
       const acc = readAccounts().find(x => x.user_id === id);
       if (!acc) return send(res, 404, { status: 'FAIL', msg: '账号不存在' });
-      const b = await readBody(req);
+      const b = await readObjectBody(req);
       const terms = Array.isArray(b.terms) ? b.terms.map(s => String(s || '').trim()).filter(Boolean) : [];
       if (!terms.length) return send(res, 400, { status: 'FAIL', msg: '没有可添加的词' });
       const r = await curlApi('POST', '/user/dictionary/bulk-import', acc.token, { content: terms.join('\n') });
-      return send(res, 200, { status: 'OK', data: { requested: terms.length, imported: r.data?.success_count ?? 0 } });
+      return send(res, 200, { status: 'OK', data: { requested: terms.length, imported: safeCount(r.data?.success_count) } });
     }
     // 给账号加单个词
     if (m === 'POST' && p.startsWith('/api/accounts/') && p.endsWith('/word')) {
       const id = decodeURIComponent(p.split('/')[3]);
       const acc = readAccounts().find(x => x.user_id === id);
-      const b = await readBody(req);
-      const r = await curlApi('POST', '/user/dictionary/add', acc.token, { term: b.term });
-      return send(res, 200, { status: 'OK', data: r.data });
+      if (!acc) return send(res, 404, { status: 'FAIL', msg: '账号不存在' });
+      const b = await readObjectBody(req);
+      const term = boundedText(b.term, 500, '词条');
+      if (!term) return send(res, 400, { status: 'FAIL', msg: '词条不能为空' });
+      await curlApi('POST', '/user/dictionary/add', acc.token, { term });
+      return send(res, 200, { status: 'OK', data: { term } });
     }
     // 删账号单个词(按 term)
     if (m === 'DELETE' && p.startsWith('/api/accounts/') && p.endsWith('/word')) {
@@ -306,7 +477,7 @@ const server = http.createServer(async (req, res) => {
       const dl = await curlApi('GET', '/user/dictionary/list?size=500', acc.token);
       const w = (dl.data?.words || []).find(x => x.term === term);
       if (!w) return send(res, 404, { status: 'FAIL', msg: '词条不存在' });
-      const r = await curlApi('POST', '/user/dictionary/delete', acc.token, { user_dictionary_id: w.user_dictionary_id });
+      await curlApi('POST', '/user/dictionary/delete', acc.token, { user_dictionary_id: w.user_dictionary_id });
       let stillExists = true;
       let absentHits = 0;
       for (let i = 0; i < 10; i++) {
@@ -317,22 +488,27 @@ const server = http.createServer(async (req, res) => {
         absentHits = stillExists ? 0 : absentHits + 1;
         if (absentHits >= 2) break;
       }
-      if (stillExists) return send(res, 500, { status: 'FAIL', msg: '删除请求已发送,但词条仍存在', data: r.data });
-      return send(res, 200, { status: 'OK', data: r.data });
+      if (stillExists) return send(res, 500, { status: 'FAIL', msg: '删除请求已发送,但词条仍存在' });
+      return send(res, 200, { status: 'OK', data: { term } });
     }
     // 主 CSV
     if (m === 'GET' && p === '/api/master') return send(res, 200, { status: 'OK', data: readMaster() });
     if (m === 'POST' && p === '/api/master') {
-      const b = await readBody(req); const t = writeMaster(b.terms || []);
+      const b = await readObjectBody(req);
+      if (!Array.isArray(b.terms)) throw new LocalApiError(400, 'INVALID_INPUT', 'terms 必须是数组');
+      const t = writeMaster(b.terms.map((term) => String(term || '')));
       return send(res, 200, { status: 'OK', data: t });
     }
     // 启动 Typeless:已带调试端口则不动,否则以调试端口启动(若已开不带端口会重启带端口)
     if (m === 'POST' && p === '/api/launch') {
-      await ensureApp();
-      return send(res, 200, { status: 'OK', msg: 'Typeless 已就绪(调试端口 ' + CDP_PORT + ')' });
+      const connection = await ensureApp();
+      return send(res, 200, { status: 'OK', msg: 'Typeless 管理连接已建立', data: connection });
     }
     send(res, 404, { status: 'FAIL', msg: 'not found: ' + p });
-  } catch (e) { send(res, 500, { status: 'FAIL', msg: e.message }); }
+  } catch (e) {
+    const code = e instanceof LocalApiError ? e.statusCode : 500;
+    send(res, code, { status: 'FAIL', code: e.code || 'INTERNAL_ERROR', msg: e.message });
+  }
 });
 
 server.on('error', (e) => {
@@ -342,4 +518,26 @@ server.on('error', (e) => {
   }
   throw e;
 });
-server.listen(PORT, '127.0.0.1', () => { log('[mgr] 管理器运行于 http://127.0.0.1:' + PORT); });
+
+server.on('clientError', (_error, socket) => {
+  if (!socket.writable) return;
+  socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+});
+
+function startServer() {
+  server.listen(PORT, '127.0.0.1', () => { log('[mgr] 管理器运行于 http://127.0.0.1:' + PORT); });
+  return server;
+}
+
+if (require.main === module) startServer();
+
+module.exports = {
+  publicAccount,
+  publicCapture,
+  publicDictionary,
+  publicLiveStatus,
+  safeCount,
+  security,
+  server,
+  startServer,
+};
