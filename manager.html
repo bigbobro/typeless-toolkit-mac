@@ -36,6 +36,10 @@
   [data-tr]::after{ left:auto; right:0; transform:translateX(0) translateY(4px); }
   [data-tr]:hover::after{ transform:translateX(0); }
   [data-tr]::before{ left:auto; right:14px; }
+  /* 左对齐变体:弹窗内贴左缘的元素,居中展开会被 .modal overflow 裁剪 */
+  [data-tl]::after{ left:0; right:auto; transform:translateX(0) translateY(4px); }
+  [data-tl]:hover::after{ transform:translateX(0); }
+  [data-tl]::before{ left:14px; right:auto; }
 
   /* ===== 顶部“检测当前登录账号”：变可点胶囊 ===== */
   .chip { appearance:none; font:inherit; font-family:var(--mono); font-size:12px; font-weight:600; cursor:pointer;
@@ -324,7 +328,7 @@
         <div style="display:none;margin-bottom:10px;" id="wordBatchRow">
           <textarea class="fld" id="wordBatchInput" placeholder="一行一个词,批量添加到当前账号词库" style="width:100%;min-height:90px;resize:vertical;"></textarea>
           <div style="display:flex;gap:8px;margin-top:8px;">
-            <button class="btn small primary" data-tip="把每一行都作为一个词加入当前账号的词库" onclick="addWordsBatch()">批量加词</button>
+            <button class="btn small primary" data-tl data-tip="把每一行都作为一个词加入当前账号的词库" onclick="addWordsBatch()">批量加词</button>
             <button class="btn small" onclick="toggleBatchAdd(false)">取消</button>
           </div>
         </div>
@@ -342,7 +346,7 @@
       <div id="tab-usage" style="display:none"></div>
       <div id="tab-personal" style="display:none"></div>
       <div class="modal-actions">
-        <button class="btn small primary" id="btnSyncOne" data-tip="把该账号词库与主词库双向补齐" onclick="syncOne()">同步本账号</button>
+        <button class="btn small primary" id="btnSyncOne" data-tl data-tip="把该账号词库与主词库双向补齐" onclick="syncOne()">同步本账号</button>
         <button class="btn small" data-tip="仅把主词库里缺的词导入该账号（单向）" onclick="importMaster()">从主词库导入</button>
         <button class="btn small" data-tip="从另一个账号复制词库到该账号" onclick="copyFrom()">从其他号复制</button>
         <button class="btn small" data-tip="把当前 Typeless 登录态存为该账号快照，供切换用" onclick="saveSnap()">更新快照</button>
@@ -361,7 +365,7 @@
       <div class="sub" style="color:var(--mut);font-size:12px;margin-bottom:8px;line-height:1.6;">一行一个词。保存后会作为所有账号同步的基准（同步时把缺失的词导入各账号，并吸收各账号已有词）。</div>
       <textarea id="masterArea"></textarea>
       <div style="margin-top:10px;display:flex;gap:8px;align-items:center;">
-        <button class="btn small primary" data-tip="保存主词库；作为所有账号同步的基准" onclick="saveMaster()">保存</button>
+        <button class="btn small primary" data-tl data-tip="保存主词库；作为所有账号同步的基准" onclick="saveMaster()">保存</button>
         <span id="masterCnt" style="font-size:12px;color:var(--mut);"></span>
       </div>
     </div>
@@ -375,17 +379,17 @@
     <div class="bd">
       <div id="addStep1">
         <div style="font-size:13px;color:var(--mut);line-height:1.7;margin-bottom:12px;">先在 Typeless 里登录要添加的账号，然后点下方按钮。工具会自动抓取当前登录账号的凭证（会重载一次主窗口）。</div>
-        <button class="btn primary" data-tip="抓取当前 Typeless 登录账号的凭证（会重载一次主窗口）" onclick="doCapture()" id="capBtn">抓取当前账号</button>
+        <button class="btn primary" data-tl data-tip="抓取当前 Typeless 登录账号的凭证（会重载一次主窗口）" onclick="doCapture()" id="capBtn">抓取当前账号</button>
         <div class="add-reg-entry">
           还没有可添加的新账号？需要先在 Typeless 里登出、注册并登录一个新账号，再回来抓取。
-          <div style="margin-top:8px;"><button class="btn small" data-tip="分步引导：登出 / 解除设备限制 → 注册并登录 → 自动检测并抓取" onclick="closeModal('addMask');openRegGuide()">→ 注册新账号引导</button></div>
+          <div style="margin-top:8px;"><button class="btn small" data-tl data-tip="分步引导：登出 / 解除设备限制 → 注册并登录 → 自动检测并抓取" onclick="closeModal('addMask');openRegGuide()">→ 注册新账号引导</button></div>
         </div>
       </div>
       <div id="addStep2" style="display:none">
         <div class="field"><label>昵称</label><input class="fld" id="addNick"></div>
         <div class="field"><label>邮箱</label><input class="fld" id="addEmail" readonly></div>
         <div class="field"><label>套餐 / user_id</label><input class="fld" id="addMeta" readonly></div>
-        <button class="btn primary" data-tip="保存该账号到管理器，并自动把主词库导入此号" onclick="saveAccount()">保存</button>
+        <button class="btn primary" data-tl data-tip="保存该账号到管理器，并自动把主词库导入此号" onclick="saveAccount()">保存</button>
         <span id="addExist" style="font-size:12px;color:var(--amber);margin-left:10px;"></span>
       </div>
     </div>
@@ -404,7 +408,7 @@
           <div class="rg-title">让 Typeless 回到登录页</div>
           <div class="rg-desc">在 Typeless 里登出当前账号（设置 → Sign out）。如果之后注册新账号时被<b>设备限制</b>拦住，再回来点「解除设备限制」重置设备 ID——当前账号已存快照的话，随时可以切回。</div>
           <div class="rg-hint" id="rgHint1"></div>
-          <div class="rg-act"><button class="btn small danger" data-tip="重置设备 ID 并登出，绕过同设备注册限制（有快照可切回当前账号）" onclick="resetDevice()">⊘ 解除设备限制</button></div>
+          <div class="rg-act"><button class="btn small danger" data-tl data-tip="重置设备 ID 并登出，绕过同设备注册限制（有快照可切回当前账号）" onclick="resetDevice()">⊘ 解除设备限制</button></div>
         </div>
       </div>
       <div class="rg-step" id="rgStep2">
@@ -420,7 +424,7 @@
         <div class="rg-body">
           <div class="rg-title">抓取并添加到管理器</div>
           <div class="rg-desc" id="rgDetected">检测到新账号登录后，这一步会自动亮起。</div>
-          <div class="rg-act" id="rgCapWrap" style="display:none"><button class="btn small primary" data-tip="抓取该账号凭证并保存到管理器（会重载一次主窗口，保存后自动导入主词库）" onclick="regCapture()">抓取并添加此账号</button></div>
+          <div class="rg-act" id="rgCapWrap" style="display:none"><button class="btn small primary" data-tl data-tip="抓取该账号凭证并保存到管理器（会重载一次主窗口，保存后自动导入主词库）" onclick="regCapture()">抓取并添加此账号</button></div>
         </div>
       </div>
     </div>
@@ -461,7 +465,7 @@
         <label id="copyTargetLabel">源账号</label>
         <select class="fld" id="copySrcSelect"></select>
       </div>
-      <button class="btn small primary" data-tip="从选中账号复制词库到当前账号" onclick="confirmCopyFrom()">复制</button>
+      <button class="btn small primary" data-tl data-tip="从选中账号复制词库到当前账号" onclick="confirmCopyFrom()">复制</button>
     </div>
   </div>
 </div>
@@ -1037,7 +1041,7 @@ function regRender(phase,info){
   if(info.disconnected){
     conn.style.display='flex';
     conn.innerHTML='<span>⚠ 管理连接未开启，无法自动检测 Typeless 登录状态</span>'
-      +'<button class="btn small" data-tip="启动或重启 Typeless 一次，开启管理连接" onclick="launch()">⏻ 连接 Typeless</button>';
+      +'<button class="btn small" data-tr data-tip="启动或重启 Typeless 一次，开启管理连接" onclick="launch()">⏻ 连接 Typeless</button>';
   }else{ conn.style.display='none'; conn.innerHTML=''; }
   for(let i=1;i<=3;i++){
     document.getElementById('rgStep'+i).className='rg-step'+(i<phase?' done':(i===phase?' on':''));
