@@ -1,164 +1,164 @@
-# Changelog
+# 更新日志
 
 ## macos-v2.3.0 - 2026-07-10
 
-### Security
+### 安全
 
-- Protect every local `/api/*` request except the product-specific health check with a random per-process session secret injected into the manager page; reject non-loopback Host, mismatched Origin, and cross-site Fetch Metadata requests.
-- Remove wildcard CORS, add no-store / anti-framing / nosniff security headers, and make the launcher identify the manager through a public product-specific `/api/health` response.
-- Stop returning account tokens from `/api/accounts`, `/api/current`, and `/api/capture`. Captured credentials now stay on the backend behind a short-lived, single-use `capture_id`.
-- Parse JSON strictly with content-type and size limits; malformed JSON now returns 400 instead of silently becoming `{}` and potentially clearing the master dictionary.
-- Require object-shaped JSON for object APIs, returning `400 INVALID_INPUT` for `null`, arrays, and scalars instead of leaking `TypeError` as 500.
-- Deep-whitelist live usage and personalization DTOs before they reach the browser, dropping unknown nested fields and normalizing non-finite numbers.
-- Whitelist dictionary rows and normalize every remote count before rendering; word mutation endpoints no longer pass upstream response objects through to the browser.
-- Return 400 for malformed HTTP request targets without terminating the manager process.
-- Remove dynamic inline event strings for account IDs and dictionary terms, expand HTML escaping, and validate account IDs before they become profile paths.
+- 除产品专属健康检查外，所有本地 `/api/*` 请求都通过注入到管理器页面的进程级随机会话密钥保护；拒绝非回环 Host、Origin 不匹配及跨站 Fetch Metadata 请求。
+- 移除通配符 CORS，新增 no-store / 防嵌套（anti-framing）/ nosniff 安全响应头，启动器改为通过公开的产品专属 `/api/health` 响应识别管理器。
+- `/api/accounts`、`/api/current`、`/api/capture` 不再返回账号 token；抓取到的凭证改为留在后端，通过短时效、一次性的 `capture_id` 访问。
+- JSON 解析改为严格校验 content-type 与大小限制；格式错误的 JSON 现在返回 400，而不是静默变成 `{}` 进而可能清空主词库。
+- 要求对象类接口的请求体必须是对象形状的 JSON；对 `null`、数组、标量值返回 `400 INVALID_INPUT`，不再把 `TypeError` 当作 500 泄露出去。
+- 实时用量与个性化 DTO 在到达浏览器前做深度白名单过滤，丢弃未知的嵌套字段，并规整非有限数值。
+- 词库行数据渲染前先做白名单过滤，规整所有远端计数；加词/删词等接口不再把上游响应对象原样透传给浏览器。
+- 对格式错误的 HTTP 请求目标返回 400，而不会导致管理器进程终止。
+- 移除账号 ID 与词库词条的动态内联事件字符串，扩大 HTML 转义范围，账号 ID 在转换为 profile 路径前先做校验。
 
-### Changed
+### 改进
 
-- Move the default runtime data root to `~/Library/Application Support/Typeless Toolkit/` while preserving `TYPELESS_DATA_DIR` as an explicit portable/test override.
-- On first start, copy legacy accounts, profiles, runtime backups, master CSV, local config, version state, and account backups through a verified staging migration. Preserve the source, fail closed on conflicts, and mark completed migration idempotently.
-- Create an immediate `post-migration` runtime backup in the stable vault so the migrated generation starts in a visibly protected state.
-- If the first launch came from an empty fresh folder, allow a later launch from the real legacy folder to complete migration while the stable vault is still empty; once the vault has imported or newly created user data, it remains authoritative.
-- Enforce `0700` on runtime directories and `0600` on credential/profile/backup files, including the retained legacy recovery copy.
-- Replace fixed `app.asar.bak` / `Info.plist.bak` rollback with versioned patch transactions under `patch-backups/`. Each transaction verifies its before-image, atomically replaces candidates, validates plist integrity and codesign, and restores only its own backup on failure.
-- Persist `committing` before the first live patch write and recover interrupted patch transactions during the next manager start. Prepared transactions fail closed if Typeless updated the live files, and manifest-write failures no longer hide the verified/failed rollback result.
-- Remove the duplicate route-level patch restore. A rollback verification failure is now reported as `recovery_required` instead of claiming recovery succeeded.
-- Publish runtime backups only after staging, per-file SHA-256 verification, and a complete manifest; incomplete or legacy unverified directories no longer produce a false “已备份” state.
-- Restore imported backup bundles as a journaled runtime-data generation. Invalid base64, duplicate paths, and path conflicts are rejected before commit; exceptions and process interruption restore the prior accounts/master/profiles generation on the next startup.
-- Rename the ambiguous "启动 Typeless" action to "连接 Typeless" and separate management-connection state from account/API availability. Connecting now shows progress, automatically re-detects the current account, and restores the chip/button state without a manual refresh.
-- Make CDP startup fail explicitly after its timeout instead of returning a false "ready" response; the standalone debug launcher now uses the same verified restart-and-connect flow.
-- Treat a CDP endpoint as Typeless only when it exposes the main window from the configured `app.asar`; remove the arbitrary-page fallback and bound HTTP, WebSocket, and command waits.
+- 默认运行时数据根目录迁移到 `~/Library/Application Support/Typeless Toolkit/`，同时保留 `TYPELESS_DATA_DIR` 作为显式的可移植/测试覆盖项。
+- 首次启动时，通过带校验的暂存式迁移，把旧版的账号、profiles、运行时备份、主 CSV、本地配置、版本状态和账号备份统一迁移过来；保留原始来源，遇冲突时安全失败（fail closed），并幂等地标记迁移完成状态。
+- 迁移完成后立即在稳定存储区创建一份 `post-migration` 运行时备份，让迁移后的这一代数据从一开始就处于可见的受保护状态。
+- 如果第一次启动来自一个全新的空文件夹，允许之后从真正的旧版文件夹启动时补完迁移（前提是稳定存储区仍为空）；一旦稳定存储区已经导入或新建了用户数据，它就成为权威数据源。
+- 运行时目录强制 `0700` 权限，凭证/profile/备份文件强制 `0600` 权限，保留的旧版恢复副本也一并适用。
+- 固定的 `app.asar.bak` / `Info.plist.bak` 回滚方式，替换为 `patch-backups/` 下的带版本号补丁事务：每个事务会校验改动前镜像、原子替换候选文件、验证 plist 完整性与代码签名，失败时只回滚自己对应的备份。
+- 在第一次实际写入补丁前持久化 `committing` 状态，管理器下次启动时会恢复被中断的补丁事务；如果 Typeless 已经更新了实际文件，已准备好的事务会安全失败；manifest 写入失败也不会再掩盖"已验证/回滚失败"的真实结果。
+- 移除路由层重复的补丁恢复逻辑；回滚校验失败时会如实报告为 `recovery_required`，不再谎称恢复成功。
+- 运行时备份只有在完成暂存、逐文件 SHA-256 校验并生成完整 manifest 后才会正式发布；不完整或旧版未校验的目录不会再产生虚假的"已备份"状态。
+- 导入的备份包以带日志（journaled）方式恢复为一代运行时数据；非法 base64、重复路径、路径冲突会在提交前被拒绝；发生异常或进程中断时，下次启动会恢复到之前一代的账号/主库/profiles 数据。
+- 把含义模糊的"启动 Typeless"操作改名为"连接 Typeless"，并将管理连接状态与账号/接口可用性区分开来。连接过程现在会显示进度、自动重新检测当前账号，并在不手动刷新的情况下恢复标签/按钮状态。
+- CDP 启动超时后会明确失败，而不是返回虚假的"就绪"响应；独立的调试启动器现在也使用同一套带校验的重启并连接流程。
+- 只有当 CDP 端点暴露的是来自配置好的 `app.asar` 的主窗口时，才认定它是 Typeless；移除"任意页面兜底"的逻辑，并为 HTTP、WebSocket、命令等待都加上了超时上限。
 
-### Tests
+### 测试
 
-- Add local API guard tests, a real loopback manager security integration test, runtime migration/permission/conflict tests, and patch transaction fault-injection tests.
-- Add deep DTO, object-body, management-connection, CDP timeout, backup staging, restore-journal, crash-recovery, and manifest-failure regression tests.
-- Full zero-dependency suite now contains 78 tests.
+- 新增本地接口防护测试、真实回环管理器安全集成测试、运行时迁移/权限/冲突测试，以及补丁事务故障注入测试。
+- 新增深度 DTO、请求体对象校验、管理连接、CDP 超时、备份暂存、恢复日志、崩溃恢复、manifest 失败等回归测试。
+- 完整的零依赖测试套件现有 78 个用例。
 
 ## macos-v2.2.0 - 2026-07-09
 
-### Added
+### 新增
 
-- Show each account's remaining token validity ("token 剩余 N 天") on its card, decoded from the JWT `exp` claim; warns amber under 30 days and red once expired.
-- Show snapshot freshness ("快照已存 · N 天前") next to the existing 快照已存/未存快照 label.
-- Support batch word add: a "批量" toggle in the dictionary tab reveals a multi-line textarea that submits through the same `bulk-import` API the sync features already use, via a new `POST /api/accounts/:id/words` route.
-- Replace 「全部同步」's single summary toast with a step-by-step results panel (reusing the 诊断 panel's progress-bar/row style), showing each account's exported/imported/master counts or error as it completes.
-- Add Typeless version-drift detection: record the last-seen `CFBundleShortVersionString` and, when Typeless auto-updates to a new version, surface a top banner warning that capabilities coupled to the app internals (token capture / paywall patch / path detection) may need re-verifying. Detection and warning only — nothing is re-run automatically. Clicking 知道了 records the new version as baseline (`GET /api/version-status`, `POST /api/version-ack`, state in gitignored `typeless-version.json`).
+- 账号卡片显示"token 剩余 N 天"（由 JWT 的 `exp` 字段解出），少于 30 天变琥珀色警示，过期后变红。
+- 在原有的"快照已存/未存快照"标签旁，新增"快照已存 · N 天前"的新鲜度显示。
+- 支持批量加词：词库页新增"批量"开关，展开多行文本框，通过新增的 `POST /api/accounts/:id/words` 路由，走同步功能已在用的 `bulk-import` 接口提交。
+- 「全部同步」不再只弹一条汇总 toast，改为逐步展示的结果面板（复用诊断面板的进度条/行样式），每个账号完成时都能看到导出/导入/主库数量或报错。
+- 新增 Typeless 版本漂移探测：记录上次看到的 `CFBundleShortVersionString`，当 Typeless 自动更新到新版本时，顶部横幅提示与 App 内部实现耦合的能力（抓 token / 去弹窗补丁 / 路径探测）可能需要重新验证。只做检测和提示，不会自动重跑任何操作；点击"知道了"会把新版本记为基线（`GET /api/version-status`、`POST /api/version-ack`，状态保存在被 gitignore 的 `typeless-version.json` 中）。
 
-### Changed
+### 改进
 
-- Replace every native `confirm()` (切号/重置设备/打补丁/删词/移除账号/导出导入备份) with an in-theme confirm modal; message text is unchanged, only the chrome changed. Esc and backdrop-click both resolve as Cancel.
-- Replace `copyFrom()`'s native `prompt()` (type the nickname) with a modal dropdown listing the other accounts.
-- Disable the relevant buttons (切换到此号/解除设备限制/解除弹窗提示/全部同步/同步本账号) while one of them is running, so double-clicks can't overlap the kill→restore→launch sequence or run two syncs at once.
-- Toasts now carry a success/failure border color instead of being visually identical either way.
-- All open modals close on Esc, not just backdrop click.
-- Reserve space so the floating boot-status pill doesn't overlap the header subtitle when it wraps to two lines; below 760px viewport width the pill drops back into normal document flow beneath the title instead of floating.
+- 所有原生 `confirm()`（切号/重置设备/打补丁/删词/移除账号/导出导入备份）替换为同主题风格的确认弹窗；提示文案不变，只改了外观。`Esc` 和点击遮罩都视为取消。
+- `copyFrom()` 原本要手动输入昵称的原生 `prompt()`，替换为列出其他账号的下拉选择弹窗。
+- 相关按钮（切换到此号/解除设备限制/解除弹窗提示/全部同步/同步本账号）在执行期间会禁用，避免手快重复点击导致 kill→restore→launch 流程重叠，或同时跑两个同步。
+- toast 提示新增成功/失败的边框颜色区分，不再两种状态视觉上一模一样。
+- 所有弹窗现在都能用 `Esc` 关闭，不再只能点遮罩关闭。
+- 预留空间，避免开机状态浮层在副标题换行成两行时发生重叠；视口宽度小于 760px 时，浮层不再悬浮，改为回到标题下方的正常文档流中。
 
-### Notes
+### 说明
 
-- Backend additions are additive only: `/api/accounts` now also returns `snapshot_mtime` / `token_expires_at` / `token_days_left`; the new `/words` and `/api/version-*` routes are new endpoints; no existing route's behavior changed.
-- Added `test/token-expiry.test.js` (5 tests, JWT decode + expiry math) and `test/version-drift.test.js` (6 tests, drift comparison + version-state round-trip); full suite is 23 tests.
+- 后端改动均为新增：`/api/accounts` 新增返回 `snapshot_mtime` / `token_expires_at` / `token_days_left`；新增的 `/words` 与 `/api/version-*` 路由都是全新接口；未改动任何既有路由的行为。
+- 新增 `test/token-expiry.test.js`（5 个用例，JWT 解码 + 过期时间计算）和 `test/version-drift.test.js`（6 个用例，版本漂移比较 + 版本状态往返一致性）；完整套件共 23 个用例。
 
 ## macos-v2.1.1 - 2026-07-09
 
-### Changed
+### 改进
 
-- Move the on-open boot detection into a floating status pill pinned to the header's empty top-right, so its progress → done → fade no longer reflows the page (previously the in-flow progress bar shifted the content below when it appeared and collapsed).
-- Stop showing the current login three times: the ephemeral "当前 Typeless 登录" confirmation now floats and fades, while the persistent `当前:` chip and the highlighted account card stay the single source of truth. The 未收录 case still shows a persistent in-flow banner to guide 添加当前账号.
-- When a Typeless auto-update has reverted the 去弹窗补丁, the boot pill fades out without flashing "✓ 检查完成"; only the persistent warning banner remains.
+- 把开机自动检测从页面内联进度条，改为固定在页头右上角空白处的浮动状态标签，其"进行中 → 完成 → 淡出"过程不再引起页面重排（之前内联进度条出现和收起时会推移下方内容）。
+- 不再把当前登录信息重复展示三次：临时的"当前 Typeless 登录"确认提示改为浮动淡出，常驻的 `当前:` 标签和高亮的账号卡片作为唯一的信息来源。"未收录"情形仍保留常驻的内联横幅，引导用户"添加当前账号"。
+- 当 Typeless 自动更新还原了去弹窗补丁时，开机状态标签会直接淡出，不再闪现"✓ 检查完成"；只保留常驻的警告横幅。
 
 ## macos-v2.1.0 - 2026-07-09
 
-### Added
+### 新增
 
-- Add a "诊断 / 健康检查" panel (toolbar → 诊断): a read-only `/api/diagnostics` aggregate showing Typeless paths, debug port, current login, 去弹窗补丁 status, and the data directory, revealed step-by-step with a progress bar.
-- Show the on-open auto-detection as one unified progress bar (加载账号 → 检测当前登录 → 自检去弹窗补丁 → 完成), so each step is legible instead of several indicators flashing independently.
-- Self-check the 去弹窗补丁 on open and warn when a Typeless auto-update has reverted it.
-- Add zero-dependency `node:test` coverage for the runtime backup-bundle round-trip and the dictionary dedup/diff logic (`node --test`, 12 tests).
+- 新增"诊断 / 健康检查"面板（工具栏 → 诊断）：一个只读的 `/api/diagnostics` 聚合接口，展示 Typeless 路径、调试端口、当前登录、去弹窗补丁状态和数据目录，通过进度条分步展示。
+- 开机自动检测改为一条统一的进度条（加载账号 → 检测当前登录 → 自检去弹窗补丁 → 完成），每一步都清晰可辨，不再是几个指示器各自闪烁。
+- 开机时自检去弹窗补丁状态，当 Typeless 自动更新将其还原时给出提示。
+- 新增零依赖的 `node:test` 覆盖：运行时备份包往返一致性、词库去重/差集逻辑（`node --test`，12 个用例）。
 
-### Changed
+### 改进
 
-- Surface the actual failure reason in add-word / delete-word / save-account / save-master toasts instead of a bare "失败".
-- Anchor the boot progress bar at the top with a fixed height so revealing other banners no longer shifts it.
+- 加词 / 删词 / 存账号 / 存主词库 的失败提示改为展示具体原因，不再只是一句"失败"。
+- 开机进度条固定在顶部并使用固定高度，其他横幅出现时不会再让它跟着移动。
 
-### Notes
+### 说明
 
-- The diagnostics endpoint is read-only; `manager.js` API behavior is otherwise unchanged.
-- `docs/architecture.md` (internal notes on patch internals) is kept local via `.gitignore`.
+- 诊断接口是只读的；`manager.js` 的其余接口行为未改动。
+- `docs/architecture.md`（补丁实现的内部笔记）通过 `.gitignore` 只保留在本地。
 
 ## macos-v2.0.0 - 2026-07-09
 
-### Changed
+### 改进
 
-- Redesign the manager UI with a monospace "terminal deck" visual language (warm paper, emerald accent), keeping every existing label and wording unchanged.
-- Restyle account cards as aligned record panels: a two-line header with an inline `当前` marker, consistent cross-card layout, and a bottom-pinned footer.
-- Replace the weekly-quota bar with a bordered-track progress bar that stays readable at 0% and when full, with green / amber / red usage levels.
-- Rebuild the dictionary tab as a dense multi-column grid with `全部` / `自动` / `手动` filters and a live word count, so large dictionaries are scannable at a glance.
-- Visualize the usage tab with a quota ring, stat cards, a speed meter, and a highlighted time-saved figure (seconds shown as minutes / hours).
+- 用等宽字体的"终端 deck"视觉语言（暖纸色调、祖母绿点缀）重新设计管理器界面，所有既有文案和标签保持不变。
+- 账号卡片重做为对齐的记录面板：两行式头部内联 `当前` 标记，跨卡片布局统一，底部固定的 footer。
+- 周额度进度条改为带边框轨道的样式，在 0% 和满额时都清晰可读，按用量分绿 / 琥珀 / 红三档。
+- 词库页重做为密集的多列网格，配 `全部` / `自动` / `手动` 筛选和实时词数统计，大词库也能一屏扫视。
+- 用量页可视化：额度环形图、统计卡片、语速表，以及高亮显示的"已节省时间"（秒数换算为分钟/小时）。
 
-### Added
+### 新增
 
-- Add hover tooltips to every action, explaining what it does and its consequences.
-- Make previously ambiguous controls read as buttons: the `检测当前登录账号` chip, the card click-through hint, segmented tabs, and icon delete.
+- 所有操作新增悬停提示（tooltip），说明其作用和后果。
+- 让之前含义模糊的控件看起来更像按钮：`检测当前登录账号` 标签、卡片可点击提示、分段标签页，以及图标删除按钮。
 
-### Notes
+### 说明
 
-- Visual and interaction refresh only; `manager.js` and all API behavior are unchanged.
+- 仅为视觉与交互翻新；`manager.js` 及所有接口行为均未改动。
 
 ## macos-v1.5.1 - 2026-07-09
 
-### Fixed
+### 修复
 
-- Fix `CDP_PORT is not defined` in the manager launch route.
+- 修复管理器启动路由中的 `CDP_PORT is not defined` 报错。
 
-### Added
+### 新增
 
-- Add visible runtime backup status in the manager.
-- Add manual local runtime backup for `accounts.json`, `profiles/`, and the master CSV.
-- Add export/import backup package support for moving data across folders or machines.
-- Add automatic runtime data backup before device reset, paywall patch, and backup restore.
-- Warn users that exported backup packages contain Typeless login information, account tokens, and profile snapshots.
+- 管理器中新增可见的运行时备份状态。
+- 新增对 `accounts.json`、`profiles/` 和主 CSV 的手动本地运行时备份。
+- 新增备份包导出/导入功能，支持跨文件夹或跨机器迁移数据。
+- 在重置设备、打补丁和恢复备份前，新增自动运行时数据备份。
+- 提示用户：导出的备份包中包含 Typeless 登录信息、账号 token 和 profile 快照。
 
-### Safety
+### 安全保障
 
-- Keep `runtime-backups/` ignored by git.
-- Write `accounts.json` atomically and keep `accounts.json.bak`.
-- Stop treating a corrupted `accounts.json` as an empty account list; preserve a `.corrupt-*.bak` copy instead.
+- `runtime-backups/` 继续保持被 git 忽略。
+- `accounts.json` 改为原子写入，并保留 `accounts.json.bak`。
+- 不再把损坏的 `accounts.json` 当作空账号列表处理，而是保留一份 `.corrupt-*.bak` 副本。
 
 ## macos-v1.5.0 - 2026-07-09
 
-### Changed
+### 改进
 
-- Support Typeless `2.0.0` / `2.0.0.114`.
-- Improve paywall renderer bundle auto-detection for Typeless 2.0.
-- Prefer renderer files that contain `type === 'paywall'` and notification/session-interrupt handlers instead of the first file that happens to contain the word `paywall`.
-- Keep paywall replacement detection automatic, with no required `config.json` changes for Typeless 2.0.
+- 支持 Typeless `2.0.0` / `2.0.0.114`。
+- 改进针对 Typeless 2.0 的付费墙渲染包自动探测。
+- 优先选择包含 `type === 'paywall'` 及通知/会话中断处理逻辑的渲染文件，不再只是选中第一个碰巧包含 `paywall` 字样的文件。
+- 付费墙替换探测保持自动化，针对 Typeless 2.0 无需修改 `config.json`。
 
-### Verified
+### 验证
 
-- Typeless app path, user data path, device cache path, `app.asar`, and `Info.plist` still match the macOS defaults.
-- CDP token capture still works on port `9222`.
-- User info and dictionary APIs still return successfully.
-- `app.asar` integrity hash and macOS codesign verification still pass before patching.
+- Typeless 应用路径、用户数据路径、设备缓存路径、`app.asar` 和 `Info.plist` 仍与 macOS 默认值一致。
+- CDP token 抓取在端口 `9222` 上仍然可用。
+- 用户信息与词库接口仍能正常返回。
+- 打补丁前的 `app.asar` 完整性哈希和 macOS 代码签名校验仍能通过。
 
-### Notes
+### 说明
 
-- Device reset was not executed during compatibility testing.
-- Paywall patch status was tested, but app file mutation is still an explicit user action from the manager.
+- 兼容性测试期间未执行设备重置。
+- 已测试付费墙补丁状态，但应用文件的实际改动仍需用户在管理器中显式操作。
 
 ## macos-v1.0.0 - 2026-07-05
 
-### Added
+### 新增
 
-- Initial macOS-only release.
-- Local web manager as the primary workflow.
-- Multi-account saving, login snapshot switching, dictionary sync, single-word operations, device reset implementation, and paywall patch support for macOS.
-- macOS `.command` launchers for the manager, Typeless debug-port launch, and optional dictionary sync.
-- README workflow for first use, adding accounts, switching accounts, and optional CLI usage.
+- 首个仅支持 macOS 的版本。
+- 以本地 Web 管理器作为主要工作流程。
+- 支持多账号保存、登录快照切换、词库同步、单词操作、设备重置实现，以及 macOS 下的付费墙补丁。
+- 新增 macOS `.command` 启动器，用于启动管理器、以调试端口启动 Typeless，以及可选的词库同步。
+- README 中补充首次使用、添加账号、切换账号及可选命令行用法的流程说明。
 
-### Changed
+### 改进
 
-- Removed Windows `.bat` entry points and Windows-only patch guide.
-- Switched default paths to macOS Typeless locations.
-- Added project-level ignores for local runtime data such as `accounts.json`, `profiles/`, CSV files, backups, logs, `CPA/`, and `SUB2/`.
+- 移除 Windows `.bat` 入口和仅限 Windows 的补丁指南。
+- 默认路径切换为 macOS 下的 Typeless 位置。
+- 新增项目级忽略规则，覆盖 `accounts.json`、`profiles/`、CSV 文件、备份、日志、`CPA/`、`SUB2/` 等本地运行时数据。
