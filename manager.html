@@ -235,6 +235,23 @@
   /* ===== 从其他号复制:选择源账号 ===== */
   select.fld { font-family:var(--mono); border:1px solid var(--line); border-radius:7px; padding:8px 11px; font-size:13px; width:100%; outline:none; background:var(--surf); color:var(--ink); }
   select.fld:focus { border-color:var(--grn); }
+  /* ===== 注册新账号引导:三步向导 ===== */
+  .rg-step { display:flex; gap:12px; padding:13px 0; border-bottom:1px dashed var(--line); opacity:.45; transition:opacity .2s; }
+  .rg-step:last-child { border-bottom:none; padding-bottom:4px; }
+  .rg-step.on { opacity:1; }
+  .rg-step.done { opacity:.75; }
+  .rg-num { flex:none; width:22px; height:22px; border-radius:50%; background:var(--line2); border:1px solid var(--line); color:var(--mut); font-size:11.5px; font-weight:700; display:flex; align-items:center; justify-content:center; margin-top:1px; }
+  .rg-step.on .rg-num { background:var(--grn); border-color:var(--grn); color:#fff; }
+  .rg-step.done .rg-num { background:var(--grn-t); border-color:var(--grn-line); color:var(--grn-d); }
+  .rg-body { flex:1; min-width:0; }
+  .rg-title { font-size:13px; font-weight:700; }
+  .rg-desc { font-size:12px; color:var(--mut); line-height:1.7; margin-top:4px; }
+  .rg-desc b { color:var(--ink); }
+  .rg-act { margin-top:9px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .rg-wait { display:none; align-items:center; gap:8px; font-size:12px; color:var(--grn-d); font-weight:600; margin-top:9px; }
+  .rg-hint { display:none; font-size:12px; color:var(--amber); font-weight:600; margin-top:8px; }
+  .rg-conn { display:none; align-items:center; justify-content:space-between; gap:10px; background:var(--amber-t); border:1px solid var(--amber-line); color:var(--amber); border-radius:9px; padding:9px 12px; font-size:12.5px; margin-bottom:12px; }
+  .add-reg-entry { margin-top:14px; padding-top:12px; border-top:1px dashed var(--line); font-size:12px; color:var(--mut); line-height:1.7; }
   @media (prefers-reduced-motion: reduce){ *{ transition:none !important; animation:none !important; } }
   /* 窄屏:悬浮状态胶囊改回文档流,堆到标题下方,避免和标题/副标题重叠 */
   @media (max-width:760px){
@@ -255,6 +272,7 @@
 
   <div class="banner warn" id="versionBanner"></div>
   <div class="banner warn" id="patchBanner"></div>
+  <div class="banner warn" id="quotaBanner"></div>
   <div class="banner" id="banner"></div>
 
   <div class="backup-panel" id="backupPanel">
@@ -358,6 +376,10 @@
       <div id="addStep1">
         <div style="font-size:13px;color:var(--mut);line-height:1.7;margin-bottom:12px;">先在 Typeless 里登录要添加的账号，然后点下方按钮。工具会自动抓取当前登录账号的凭证（会重载一次主窗口）。</div>
         <button class="btn primary" data-tip="抓取当前 Typeless 登录账号的凭证（会重载一次主窗口）" onclick="doCapture()" id="capBtn">抓取当前账号</button>
+        <div class="add-reg-entry">
+          还没有可添加的新账号？需要先在 Typeless 里登出、注册并登录一个新账号，再回来抓取。
+          <div style="margin-top:8px;"><button class="btn small" data-tip="分步引导：登出 / 解除设备限制 → 注册并登录 → 自动检测并抓取" onclick="closeModal('addMask');openRegGuide()">→ 注册新账号引导</button></div>
+        </div>
       </div>
       <div id="addStep2" style="display:none">
         <div class="field"><label>昵称</label><input class="fld" id="addNick"></div>
@@ -365,6 +387,41 @@
         <div class="field"><label>套餐 / user_id</label><input class="fld" id="addMeta" readonly></div>
         <button class="btn primary" data-tip="保存该账号到管理器，并自动把主词库导入此号" onclick="saveAccount()">保存</button>
         <span id="addExist" style="font-size:12px;color:var(--amber);margin-left:10px;"></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 注册新账号引导:三步向导,轮询 /api/current 自动点亮步骤 -->
+<div class="mask" id="regMask" onclick="if(event.target===this)closeModal('regMask')">
+  <div class="modal" style="width:min(540px,94vw)">
+    <div class="hd"><h3>注册新账号引导</h3><button class="btn small" data-tr data-tip="关闭" onclick="closeModal('regMask')">✕</button></div>
+    <div class="bd">
+      <div class="rg-conn" id="rgConn"></div>
+      <div class="rg-step" id="rgStep1">
+        <div class="rg-num" id="rgNum1">1</div>
+        <div class="rg-body">
+          <div class="rg-title">让 Typeless 回到登录页</div>
+          <div class="rg-desc">在 Typeless 里登出当前账号（设置 → Sign out）。如果之后注册新账号时被<b>设备限制</b>拦住，再回来点「解除设备限制」重置设备 ID——当前账号已存快照的话，随时可以切回。</div>
+          <div class="rg-hint" id="rgHint1"></div>
+          <div class="rg-act"><button class="btn small danger" data-tip="重置设备 ID 并登出，绕过同设备注册限制（有快照可切回当前账号）" onclick="resetDevice()">⊘ 解除设备限制</button></div>
+        </div>
+      </div>
+      <div class="rg-step" id="rgStep2">
+        <div class="rg-num" id="rgNum2">2</div>
+        <div class="rg-body">
+          <div class="rg-title">在 Typeless 注册并登录新账号</div>
+          <div class="rg-desc">在 Typeless 登录页选择注册（Sign up），用一个新邮箱完成注册并登录。登录成功后这里会自动检测到。</div>
+          <div class="rg-wait" id="rgWait"><span class="spin"></span><span>正在等待检测新账号登录…</span></div>
+        </div>
+      </div>
+      <div class="rg-step" id="rgStep3">
+        <div class="rg-num" id="rgNum3">3</div>
+        <div class="rg-body">
+          <div class="rg-title">抓取并添加到管理器</div>
+          <div class="rg-desc" id="rgDetected">检测到新账号登录后，这一步会自动亮起。</div>
+          <div class="rg-act" id="rgCapWrap" style="display:none"><button class="btn small primary" data-tip="抓取该账号凭证并保存到管理器（会重载一次主窗口，保存后自动导入主词库）" onclick="regCapture()">抓取并添加此账号</button></div>
+        </div>
       </div>
     </div>
   </div>
@@ -629,6 +686,7 @@ async function loadAccounts(){
 }
 function pct(v,l){ return l? Math.min(100, Math.round(v/l*100)):0; }
 function render(){
+  updateQuotaBanner();
   const g=document.getElementById('grid');
   if(!ACCOUNTS.length){ g.innerHTML='<div class="empty">还没有账号。点「添加当前账号」开始（先在 Typeless 登录该号）。</div>'; return; }
   g.innerHTML=ACCOUNTS.map(a=>{
@@ -961,6 +1019,86 @@ async function saveAccount(){
   const m=await api('/api/accounts/'+encodeURIComponent(d.user_id)+'/import-master',{method:'POST'});
   if(m.status==='OK') toast('添加完成,已导入 '+m.data.imported+' 个词','ok');
   await loadAccounts(); loadBackupStatus();
+}
+
+// ===== 注册新账号引导:轮询 /api/current 驱动三步状态 =====
+// 状态映射: OK+已收录账号→步骤1(还没登出) / FAIL+connected→步骤2(登录页,等注册) / OK+未收录账号→步骤3(可抓取) / FAIL+disconnected→提示先连接
+let REG_TIMER=null, REG_POLLING=false, REG_DETECTED=null;
+function openRegGuide(){
+  REG_DETECTED=null;
+  openModal('regMask');
+  regRender(1);
+  regPoll();
+  if(!REG_TIMER) REG_TIMER=setInterval(regPoll,4000);
+}
+function regRender(phase,info){
+  info=info||{};
+  const conn=document.getElementById('rgConn');
+  if(info.disconnected){
+    conn.style.display='flex';
+    conn.innerHTML='<span>⚠ 管理连接未开启，无法自动检测 Typeless 登录状态</span>'
+      +'<button class="btn small" data-tip="启动或重启 Typeless 一次，开启管理连接" onclick="launch()">⏻ 连接 Typeless</button>';
+  }else{ conn.style.display='none'; conn.innerHTML=''; }
+  for(let i=1;i<=3;i++){
+    document.getElementById('rgStep'+i).className='rg-step'+(i<phase?' done':(i===phase?' on':''));
+    document.getElementById('rgNum'+i).textContent=i<phase?'✓':String(i);
+  }
+  const h1=document.getElementById('rgHint1');
+  if(info.knownLogin){ h1.style.display='block'; h1.textContent='当前登录的还是已收录账号「'+info.knownLogin+'」— 尚未登出。'; }
+  else{ h1.style.display='none'; h1.textContent=''; }
+  document.getElementById('rgWait').style.display=(phase===2&&!info.disconnected)?'flex':'none';
+  const det=document.getElementById('rgDetected'), cap=document.getElementById('rgCapWrap');
+  if(phase===3&&REG_DETECTED){
+    det.innerHTML='✓ 检测到新账号 <b>'+esc(REG_DETECTED.email||REG_DETECTED.user_id)+'</b> 已登录。确认是刚注册的新账号后，点下方按钮加入管理器。';
+    cap.style.display='flex';
+  }else{
+    det.textContent='检测到新账号登录后，这一步会自动亮起。';
+    cap.style.display='none';
+  }
+}
+async function regPoll(){
+  const mask=document.getElementById('regMask');
+  // 任何方式关闭弹窗(✕/遮罩/Esc)后,下一轮自清理定时器
+  if(!mask.classList.contains('on')){ if(REG_TIMER){ clearInterval(REG_TIMER); REG_TIMER=null; } return; }
+  if(REG_POLLING) return;
+  REG_POLLING=true;
+  try{
+    const r=await api('/api/current');
+    if(!mask.classList.contains('on')) return;
+    if(r.status==='OK'&&r.data){
+      const d=r.data;
+      const known=ACCOUNTS.find(x=>x.user_id===d.user_id);
+      if(known){ REG_DETECTED=null; regRender(1,{knownLogin:known.nickname||known.email||d.user_id}); }
+      else{ REG_DETECTED=d; regRender(3); }
+    }else{
+      REG_DETECTED=null;
+      if(r.data?.state==='connected') regRender(2);
+      else regRender(1,{disconnected:true});
+    }
+  }catch(e){ /* 单次探测失败:保持当前显示,下一轮再试 */ }
+  finally{ REG_POLLING=false; }
+}
+function regCapture(){
+  if(REG_TIMER){ clearInterval(REG_TIMER); REG_TIMER=null; }
+  closeModal('regMask');
+  addAccount();   // 复用添加弹窗:抓取成功后自动进入保存表单(含自动导入主词库)
+  doCapture();
+}
+
+// 当前账号本周额度用满时,顶部横幅主动引导注册新账号(每次会话可忽略)
+let QUOTA_DISMISSED=false;
+function updateQuotaBanner(){
+  const b=document.getElementById('quotaBanner');
+  const cur=CUR_ID?ACCOUNTS.find(x=>x.user_id===CUR_ID):null;
+  const u=(cur&&cur.live&&cur.live.usage)||{};
+  const lim=u.week_word_usage_limit||8000;
+  const full=u.week_word_usage_value!=null&&u.week_word_usage_value>=lim;
+  if(!cur||!full||QUOTA_DISMISSED){ b.style.display='none'; b.innerHTML=''; return; }
+  b.style.display='flex';
+  b.innerHTML='<span>⚠ 当前账号「'+esc(cur.nickname)+'」本周额度已用满（'+u.week_word_usage_value.toLocaleString()+' / '+lim.toLocaleString()+'）— 可注册一个新账号继续使用。</span>'
+    +'<span style="display:flex;gap:10px;align-items:center;flex:none;">'
+    +'<button class="btn small" data-tip="分步引导：登出 / 解除设备限制 → 注册并登录 → 自动检测并抓取" onclick="openRegGuide()">→ 注册新账号引导</button>'
+    +'<span class="x" data-tip="本次会话不再提示" onclick="QUOTA_DISMISSED=true;updateQuotaBanner()">✕</span></span>';
 }
 
 async function openMaster(){
