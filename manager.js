@@ -171,7 +171,7 @@ const server = http.createServer(async (req, res) => {
       security.assertPageRequest(req);
       return send(res, 200, {
         status: 'OK',
-        data: { product: 'typeless-toolkit-manager', state: 'ready', version: '2.4.1' },
+        data: { product: 'typeless-toolkit-manager', state: 'ready', version: '2.4.2' },
       });
     }
     // 前端首页

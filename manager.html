@@ -40,6 +40,9 @@
   [data-tl]::after{ left:0; right:auto; transform:translateX(0) translateY(4px); }
   [data-tl]:hover::after{ transform:translateX(0); }
   [data-tl]::before{ left:14px; right:auto; }
+  /* 弹窗标题栏内的提示(如关闭按钮):向上展开会被弹窗顶边裁掉,改为向下展开 */
+  .modal .hd [data-tip]::after{ bottom:auto; top:calc(100% + 9px); }
+  .modal .hd [data-tip]::before{ bottom:auto; top:calc(100% + 4px); border-top-color:transparent; border-bottom-color:#1b1d21; }
 
   /* ===== 顶部“检测当前登录账号”：变可点胶囊 ===== */
   .chip { appearance:none; font:inherit; font-family:var(--mono); font-size:12px; font-weight:600; cursor:pointer;
