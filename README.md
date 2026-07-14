@@ -1,191 +1,154 @@
 # Typeless Toolkit for macOS
 
-Typeless 桌面端的 macOS 本地管理工具。主入口是一个本地网页管理器,用于多账号保存、登录态切换、个人词库同步、设备 ID 重置,以及去升级/会员弹窗补丁。
+给 **macOS 上的 Typeless** 用的本机管理器：把多个账号收在一个页面里，切号、对齐词库、处理设备限制、去掉升级/会员弹窗。数据只留在本机，打开浏览器操作，不用注册云端、也不用 `npm install`。
 
-这是一个纯 Node.js 项目,不需要 `npm install`。默认只面向 macOS 版 Typeless。
+**只做 Mac。** 路径探测、Keychain、codesign、稳定数据目录都按 macOS 桌面端设计；不维护其他平台。
 
-## 先说流程
+本仓库已从早期 fork 网络脱离，[独立维护](https://github.com/bigbobro/typeless-toolkit-mac)。功能、界面、数据位置和发版以这里为准；版本记录见 [CHANGELOG.md](./CHANGELOG.md)。历史上受益于 [Jia131313/typeless-toolkit](https://github.com/Jia131313/typeless-toolkit) 与 [estarpro1022/typeless-reset-device](https://github.com/estarpro1022/typeless-reset-device)，致谢见文末——**日常使用不必关心上游**。
 
-日常使用只需要打开管理器。CLI 是备用入口,不是必需流程。
+---
 
-新用户首次使用:
+## 管理器能帮你什么
 
-1. 启动管理器。
-2. 在管理器里点「连接 Typeless」,建立识别当前登录账号所需的管理连接。如果 Typeless 已经普通启动,这里会自动重启一次。
-3. 在 Typeless 里登录一个账号。
-4. 回到管理器,点「添加当前账号」。
-5. 点「全部同步」,把这个账号的个人词库合并进本地主词库。
+日常入口只有一个本地页面（`http://127.0.0.1:7788`）。CLI 是备用，可以当不存在。
 
-以后新增账号:
+- **多账号在同一页**：保存登录 token 和本机快照；卡片上能看到额度、token 大约还剩几天、快照是多久前存的。
+- **切号不折腾设备**：点「切换到此号」即还原该号快照并重启 Typeless。设备 ID 重置只留给「被设备限制挡住」的时候，不是切号步骤。
+- **加新号有向导**：注册引导会按「回到登录页 → 在 Typeless 注册登录 → 抓回管理器」走；本周额度用满时顶部也会提示可以新开一号。
+- **词库只增不删**：「全部同步」把各号个人词并进本地主词库，再把缺的导回去，最后对齐到并集；支持单词增删和批量加词。
+- **数据跟着系统用户，不跟着源码夹**：账号、词库、备份在  
+  `~/Library/Application Support/Typeless Toolkit/`。  
+  换 release 文件夹、重装源码，只要还是同一台 Mac、同一个 macOS 用户，数据还在。
+- **本机接口有边界**：每次启动发一次性会话密钥；token 默认不进浏览器，只有你主动导出备份包才会带上凭证。
+- **Typeless 自己更新了会说一声**：版本漂移横幅提醒抓 token、去弹窗等与 App 内部实现绑在一起的能力可能要复核；补丁失败会按当次事务回滚，不会拿旧版本备份硬盖。
 
-1. 管理器不用关,保持开着即可。
-2. 在 Typeless 里退出/切换到新账号。
-3. 如果 Typeless 因设备限制不让继续登录或注册,再使用管理器里的「解除设备限制」。
-4. 登录成功后,回到管理器点「添加当前账号」。
-5. 点「全部同步」,让新账号和已有账号的词库对齐。
+---
 
-以后切换账号:
+## 环境
 
-1. 打开管理器。
-2. 在账号卡片里点「切换到此号」。
-3. 管理器会还原该账号的登录态快照,并重启 Typeless。
-
-切换已保存账号不需要重置设备。设备 ID 重置只在新增账号、注册账号或重新登录时遇到 Typeless 设备限制才使用;它会清掉当前 Typeless 登录状态,不是日常切号步骤。
-
-管理器本质上是运行在本机的服务: `http://127.0.0.1:7788`。使用期间保持终端窗口开着即可;用完后可以在终端按 `Ctrl+C` 退出。
-
-顶部的「管理连接未开启」不表示 Typeless 账号掉线。账号卡片可以使用已保存 token 独立刷新;只有识别或抓取桌面端当前登录账号时才需要管理连接。点击「连接 Typeless」后,页面会等待连接成功并自动更新顶部状态。
-
-管理器每次启动都会生成一次性的本机会话密钥。除公开的 `/api/health` 外,所有 `/api/*` 请求都必须来自当前管理器页面并携带这个密钥;服务不开放 CORS。常规账号和抓取接口不会把 token 返回浏览器;只有用户主动确认「导出备份包」时,浏览器才会接收并保存包含 token 的备份文件。启动脚本通过 `/api/health` 的产品标识确认端口上运行的确实是本管理器。
-
-## 功能状态
-
-| 功能 | 入口 | 说明 |
-| --- | --- | --- |
-| 多账号管理 | 管理器 | 保存账号 token 和登录态快照 |
-| 登录态切换 | 管理器 | 从本地快照恢复账号状态 |
-| 个人词库同步 | 管理器 | 推荐使用「全部同步」 |
-| 单词增删 | 管理器 | 对单个账号操作 |
-| 设备 ID 重置 | 管理器 | 只在设备限制时使用 |
-| 去升级/会员弹窗 | 管理器 | 修改 Typeless.app 本地文件 |
-| Typeless 管理连接 | 管理器 / `.command` | 通过本地 CDP 识别和抓取当前登录账号 |
-| 词库同步 CLI | `.command` / JS | 可选备用,日常不需要 |
-
-## 快速开始
-
-要求:
-
-- macOS
-- Node.js 22+
+- macOS + Node.js **22+**
 - 已安装 Typeless.app
-- 系统自带 `curl`, `security`, `codesign`, `PlistBuddy`
+- 系统自带：`curl`、`security`、`codesign`、`PlistBuddy`
 
-推荐使用 `git clone`,它通常会保留 `.command` 的可执行权限。如果是从 GitHub `Download ZIP` 下载,确认来源可信后,首次运行前可在项目目录执行:
+推荐 `git clone`（保留 `.command` 可执行权限）。若用 GitHub Download ZIP，确认来源可信后在项目目录执行：
 
 ```bash
 chmod +x *.command
 xattr -dr com.apple.quarantine . 2>/dev/null || true
 ```
 
-启动管理器:
+---
+
+## 启动
 
 ```bash
 ./启动管理器.command
 ```
 
-如果管理器已经在运行,再次执行这个脚本只会打开已有页面。
-
-或者手动启动:
+已在运行时再执行，只会打开已有页面。手动等价：
 
 ```bash
 node manager.js
 open http://127.0.0.1:7788
 ```
 
-## 从旧版本升级
+用完在终端 `Ctrl+C`。
 
-`macos-v2.3.0` 第一次把账号和备份迁移到稳定数据目录。老用户任选一条路径:
+顶部 **「管理连接未开启」不等于账号掉线**。账号卡片可凭已存 token 刷新用量；只有识别/抓取「当前桌面端登录的是谁」才需要管理连接。点「连接 Typeless」后页面会等到连上（若 Typeless 已普通启动，会自动重启一次以打开调试口）。
 
-1. **原目录迁移**:先退出旧管理器,再把新版本文件夹里的内容覆盖/合并到旧项目根目录,然后运行一次新版。不要把整个新版本文件夹嵌套成 `旧目录/新版本目录/manager.js`。
-2. **备份导入**:`macos-v1.5.1` 及之后的旧版本可以先导出备份包,把新版解压到全新目录后点「导入恢复」。更早版本没有导出功能,请使用原目录迁移。
+单独拉起带调试口的 Typeless 可用：`启动Typeless(带调试端口).command`。
 
-迁移、导入或新建数据完成后,同一台 Mac、同一个 macOS 用户账户下的后续 release 可以解压到任意目录,都会继续读取同一套稳定数据。换机器或换系统用户时仍需使用「导出备份包」和「导入恢复」。
+---
 
-## 账号和数据保存在哪里
+## 用法
 
-本项目只在本机保存运行数据。默认稳定目录是:
+### 第一次
+
+1. 启动管理器 →「连接 Typeless」
+2. 在 Typeless 登录
+3. 管理器「添加当前账号」
+4. 「全部同步」——个人词并入本地主词库
+
+### 再加一个账号
+
+管理器保持开着。在 Typeless 退出并登录新号，或走页面上的 **注册新账号引导**（添加账号弹窗里也有入口）。若被设备限制拦住，先「解除设备限制」，再添加、再全部同步。
+
+### 切号
+
+账号卡片「切换到此号」→ 还原快照 → 重启 Typeless。  
+已保存账号之间切换**不要**先重置设备。
+
+### 词库怎么对齐
+
+同步两步，都是只增：
+
+1. 各账号导出 → 合并进 `Typeless词库主清单.csv`
+2. 主词库缺的词再导回各账号
+
+「全部同步」时页面会按账号逐步显示进度，而不是只给一条总结果。
+
+可选 CLI（只动当前登录号、或你要写脚本时）：
+
+```bash
+./同步词库.command
+# 或
+node typeless-dict-sync.js
+```
+
+### 备份与搬家
+
+管理器顶部有备份状态：
+
+| 操作 | 用途 |
+| --- | --- |
+| 立即备份 | 写到稳定目录内 `runtime-backups/`，防本机误操作（仍是同一块盘） |
+| 导出备份包 | 可带走的 JSON，换机器 / 换系统用户 / 离线保管 |
+| 导入恢复 | 从备份包恢复；恢复前会先备份当前数据 |
+
+备份包含 token 与 profile，**只在可信环境保存，不要外传**。
+
+---
+
+## 数据目录
+
+稳定根目录（`macos-v2.3.0` 起默认）：
 
 ```text
 ~/Library/Application Support/Typeless Toolkit/
 ```
 
-- `accounts.json`: 保存账号信息和 token。明文文件,权限固定为仅当前用户可读写,不要上传。
-- `profiles/`: 保存每个账号的 Typeless 登录态快照。不要上传。
-- `Typeless词库主清单.csv`: 本地主词库,由同步功能自动创建或更新。不要上传。
-- `config.local.json`: 你的本机配置覆盖文件。不要上传。
-- `runtime-backups/`: 运行数据的固定本地备份目录。不要上传。
-- `patch-backups/`: 每次实际修改 Typeless.app 前创建的版本化事务备份。
+| 路径 | 内容 |
+| --- | --- |
+| `accounts.json` | 账号与 token（明文，`0600`，勿上传） |
+| `profiles/` | 各账号登录态快照 |
+| `Typeless词库主清单.csv` | 本地主词库 |
+| `config.local.json` | 本机配置覆盖（不进 git） |
+| `runtime-backups/` | 运行数据本地备份 |
+| `patch-backups/` | 修改 Typeless.app 前的版本化事务备份 |
 
-稳定目录及其子目录使用 `0700`,敏感文件使用 `0600`。仓库里的同名旧路径仍保留在 `.gitignore`,防止旧版本数据被误提交。
+目录 `0700`，敏感文件 `0600`。仓库里旧路径名仍在 `.gitignore`。
 
-从旧版本首次启动时,管理器会把项目目录中的 `accounts.json`、`profiles/`、`runtime-backups/`、主词库、`config.local.json` 和版本状态安全复制到稳定目录。迁移会先检查冲突,通过临时目录复制并校验 SHA-256,最后写入完成标记,并自动创建一份 `post-migration` 本地备份;旧源数据不会自动删除。以后更新项目可以直接替换源码目录,账号和备份仍留在 Application Support。
+- 同一 Mac、同一 macOS 用户：源码放哪都行，读的是这一套数据。  
+- 换机器或换系统用户：导出备份包 → 新环境导入。  
+- 便携/测试：设 `TYPELESS_DATA_DIR`（设置后不做自动迁移）。
 
-如果稳定目录和旧目录已经存在内容不同的同名数据,管理器会停止启动并提示冲突,不会猜测、合并或覆盖。需要便携/测试目录时仍可显式设置 `TYPELESS_DATA_DIR`；设置后不会执行自动迁移。
+从更早版本升上来时，第一次启动会把项目目录里的账号、profiles、主词库、备份、`config.local.json` 等迁进稳定目录（有冲突就停，不瞎合并）。两种做法：
 
-如果第一次误从空的新目录启动,但稳定目录里仍没有账号/主词库/运行备份,之后从真正的旧目录启动时仍会补做自动迁移。一旦稳定目录已经有数据或已经导入过备份,它就是唯一基准,不会再用另一个旧目录覆盖。
+1. 退出旧管理器，用新版覆盖旧项目根（不要嵌套成「旧目录/新目录/manager.js」），再跑一次  
+2. `macos-v1.5.1+` 先导出备份包，新目录解压后「导入恢复」
 
-新用户没有迁移步骤:第一次添加账号后数据直接写入稳定目录。自动迁移、导入恢复或新建数据完成后,同一台 Mac、同一个 macOS 用户账户下的后续 release 都可以解压到任意目录并继续使用同一套数据。
-
-管理器顶部会显示运行数据备份状态:
-
-- 「已备份」表示稳定数据目录里的账号、profile 快照和主词库已经有本地备份。
-- 「未备份」表示这些运行数据在最近一次备份后又有变化。
-- 「立即备份」会备份到稳定数据目录内固定的 `runtime-backups/`,用于防止误操作;它仍在同一块磁盘上,不能替代异盘备份。
-- 「导出备份包」会下载一个可迁移的 JSON 备份包,适合本人换目录、换机器或离线保管。
-- 「导入恢复」可以从这个备份包恢复账号、profile 快照和主词库。恢复前会先自动备份当前数据。
-
-备份包包含 Typeless 登录信息、账号 token 和 profile 快照。不要随意分享给他人,只在可信环境里保存和导入。
-
-本地备份会先写入 staging,逐文件校验 SHA-256 并生成完整 manifest,最后才发布为可用备份。导入恢复同样先完整校验和 staging；如果进程在提交中被中断,下一次启动会先恢复中断前的账号、主词库和 profiles,再打开管理器。
-
-## 词库同步怎么理解
-
-管理器里的同步是只增不删:
-
-1. 先从账号导出个人词库,合并进本地主词库。
-2. 再把本地主词库里该账号缺少的词导入账号。
-
-所以「全部同步」的结果是:所有已保存账号都会逐步对齐到同一份词库并集。它不会删除任何账号里的词。
-
-## 还要不要用 CLI
-
-通常不用。
-
-`同步词库.command` 和 `typeless-dict-sync.js` 只是备用入口,适合只想对当前登录账号做一次同步,或者以后做自动化脚本。管理器已经覆盖日常操作:添加账号、切换账号、全部同步、单账号同步、单词增删。
-
-CLI 用法:
-
-```bash
-./同步词库.command
-```
-
-或者:
-
-```bash
-node typeless-dict-sync.js
-```
+---
 
 ## 配置
 
-默认配置通常不用改:
+一般不用改。自动查找：
 
-```json
-{
-  "typeless_app": "",
-  "user_data_dir": "",
-  "device_cache_path": "",
-  "asar_path": "",
-  "cdp_port": 9222,
-  "manager_port": 7788,
-  "api_base": "https://api.typeless.com",
-  "master_csv": "Typeless词库主清单.csv",
-  "paywall": {
-    "file_path": [],
-    "replacements": [],
-    "auto_detect_file": true,
-    "auto_detect_replacements": true
-  }
-}
-```
+- Typeless.app：`/Applications` 或 `~/Applications`
+- 用户数据：`~/Library/Application Support/Typeless`
+- device cache：`~/Library/Application Support/now.typeless.desktop/device.cache`
+- `app.asar`：应用包内 `Contents/Resources/app.asar`
 
-自动探测路径:
-
-- Typeless.app: `/Applications/Typeless.app`, `~/Applications/Typeless.app`
-- 用户数据: `~/Library/Application Support/Typeless`
-- device cache: `~/Library/Application Support/now.typeless.desktop/device.cache`
-- app.asar: `Typeless.app/Contents/Resources/app.asar`
-
-如果你的 Typeless 不在默认路径,不要直接改仓库配置。在稳定数据目录中创建 `config.local.json`:
+路径不对时，在**稳定数据目录**写 `config.local.json`，不要改仓库里的 `config.json`：
 
 ```json
 {
@@ -193,59 +156,33 @@ node typeless-dict-sync.js
 }
 ```
 
-`config.local.json` 会覆盖仓库内的 `config.json`,并且不会提交到 git。旧版本放在项目目录里的 `config.local.json` 会在首次启动时一起迁移。
+常用键：`typeless_app`、`cdp_port`（默认 9222）、`manager_port`（默认 7788）、`api_base`、`paywall`（自动探测失败再手工填）。
 
-## 设备 ID 重置
+---
 
-只有遇到 Typeless 设备限制时才需要这个功能。
+## 设备限制
 
-管理器里的「解除设备限制」会:
+只有 Typeless 报设备限制时才用「解除设备限制」。它会：退出应用 → 清 Keychain 设备标识 → 删 `device.cache` / `user-data.json` 等相关状态 → 清 Cookies / Local Storage → 重启 Typeless。
 
-1. 退出 Typeless。
-2. 删除 Keychain 中的设备标识。
-3. 删除 `device.cache`。
-4. 删除 `user-data.json`。
-5. 清理 `app-storage.json` 的 `userData` / `quotaUsage`。
-6. 删除 Cookies 和 Local Storage。
-7. 重新启动 Typeless。
+**会登出当前账号。** 先确认该号已在管理器保存，或你能重新登录。
 
-这个操作会登出当前账号。使用前先确认账号已经在管理器里保存过,或者你能重新登录。
+Keychain 与路径整理参考 [typeless-reset-device](https://github.com/estarpro1022/typeless-reset-device)：
 
-macOS 设备 ID 位置参考了 `estarpro1022/typeless-reset-device` 的整理:
+- service：`now.typeless.desktop.deviceIdentifier`
+- account：`now.typeless.desktop.security.auth_key`
+- cache：`~/Library/Application Support/now.typeless.desktop/device.cache`
 
-- Keychain service: `now.typeless.desktop.deviceIdentifier`
-- Keychain account: `now.typeless.desktop.security.auth_key`
-- cache: `~/Library/Application Support/now.typeless.desktop/device.cache`
+---
 
-## 去弹窗补丁
+## 去升级 / 会员弹窗
 
-管理器里的「解除弹窗提示」会修改 Typeless.app 内部文件:
+「解除弹窗提示」会改 Typeless.app 内文件：先在 `patch-backups/` 做绑定当前版本与 SHA-256 的事务备份 → 等长替换 paywall 相关分支 → 更新 asar 与 Info.plist 完整性 → ad-hoc codesign 并校验 → 重启。
 
-1. 退出 Typeless。
-2. 在稳定数据目录的 `patch-backups/` 中创建绑定当前 Typeless 版本和原始 SHA-256 的本次事务备份。
-3. 在 renderer bundle 中自动查找 `type === 'paywall'` 分支。
-4. 做等长替换。
-5. 更新 asar per-file SHA256。
-6. 更新 `Info.plist` 中的 `ElectronAsarIntegrity.Resources/app.asar.hash`。
-7. 原子替换候选文件,对 `Typeless.app` 执行 ad-hoc codesign。
-8. 验证 Info.plist 完整性、补丁标记和 `codesign --verify --deep --strict`。
-9. 重启 Typeless。
+- Typeless **自动更新**可能冲掉补丁，需要再打一次；页面上的版本漂移提示就是为这类情况准备的  
+- 任一步失败按**本次** before-image 回滚  
+- 自动识别失败时停止、不猜测写入；可在 `config.local.json` 的 `paywall` 里指定 `file_path` / `replacements`（两侧 UTF-8 字节长度必须相同，原文在文件中唯一）
 
-Typeless 自动更新后可能会重写应用文件,需要重新打补丁。
-
-任一步失败都会只使用本次事务的 before-image 恢复 `app.asar` 和 `Info.plist`,重新签名并校验。不会再使用可能属于旧 Typeless 版本的固定 `.bak`。如果界面明确提示“需要人工恢复”,可从最近一次事务目录恢复:
-
-补丁在第一次写入应用文件前会持久化 `committing` 状态。如果进程在中途退出,下一次管理器启动会先校验 before-image、恢复文件并重新签名；如果 Typeless 已在 `prepared` 阶段后自行更新,管理器会保留外部更新并停止补丁,不会用旧备份覆盖。
-
-### 自动识别失败时
-
-Typeless 更新可能改变 renderer 文件路径或压缩后的函数名。管理器找不到唯一目标时会停止,不会猜测写入。需要手工适配时,在稳定数据目录的 `config.local.json` 中覆盖 `paywall`:
-
-- `file_path`:目标文件在 `app.asar` 内的路径,按 `/` 拆成字符串数组。
-- `replacements`:一个或多个 `[原字符串,替换字符串]`。两侧 UTF-8 字节长度必须相同,原字符串在目标文件中必须唯一。
-- `auto_detect_file` / `auto_detect_replacements`:保留 `true` 可继续使用自动探测；确认手工值后可设为 `false`。
-
-不要直接修改仓库里的 `config.json`,也不要在无法确认路径和等长替换时强行打补丁。
+界面提示需人工恢复时（路径按你的安装位置改）：
 
 ```bash
 DATA="$HOME/Library/Application Support/Typeless Toolkit"
@@ -256,47 +193,59 @@ codesign --force --deep --sign - /Applications/Typeless.app
 codesign --verify --deep --strict /Applications/Typeless.app
 ```
 
-如果使用过 `TYPELESS_DATA_DIR`,把 `DATA` 改为该变量指向的实际目录。如果 Typeless 安装在别处,把应用路径换成你的 `typeless_app`。
+---
 
-## 文件说明
+## 本机服务边界
 
-- `manager.js`: 本地 HTTP 后端。
-- `manager.html`: 管理器页面。
-- `lib/common.js`: Typeless 路径探测、CDP、API、账号快照、同步、补丁逻辑。
-- `lib/runtime-data.js`: 稳定数据目录、首次迁移、冲突检测与权限收紧。
-- `lib/local-api-security.js`: 本地会话、Host/Origin 校验、安全响应头和严格 JSON 请求。
-- `lib/patch-transaction.js`: 版本化补丁 before-image、原子替换、验证与精确回滚。
-- `typeless-dict-sync.js`: 可选的词库同步 CLI。
-- `启动管理器.command`: 启动管理器并打开浏览器。
-- `启动Typeless(带调试端口).command`: 启动或重启 Typeless,并验证本地管理连接已建立。
-- `同步词库.command`: 运行可选词库同步 CLI。
+- 只监听回环地址，不开放 CORS  
+- 除公开 `/api/health` 外，`/api/*` 须来自当前管理器页并携带本次启动的会话密钥  
+- 常规账号/抓取接口不把 token 回给浏览器；导出备份包才是明确的出站凭证路径  
+- 启动脚本用 `/api/health` 的产品标识确认端口上跑的是本管理器  
 
-## Credits
+---
 
-这个项目来自对原工具集的 fork 和 macOS 重构:
+## 仓库里有什么
 
-- 原工具集: [Jia131313/typeless-toolkit](https://github.com/Jia131313/typeless-toolkit)
-- macOS 设备 ID reset 参考: [estarpro1022/typeless-reset-device](https://github.com/estarpro1022/typeless-reset-device)
+| 路径 | 作用 |
+| --- | --- |
+| `manager.js` / `manager.html` | 管理器后端与页面 |
+| `lib/common.js` | 路径、CDP、API、同步、补丁等 |
+| `lib/runtime-data.js` | 稳定目录、迁移、权限 |
+| `lib/local-api-security.js` | 会话与请求校验 |
+| `lib/patch-transaction.js` | 补丁事务与回滚 |
+| `typeless-dict-sync.js`、`*.command` | 备用 CLI / 双击入口 |
+| `test/` | 零依赖测试 |
+| `CHANGELOG.md` | 版本说明 |
 
-特别感谢 `typeless-reset-device` 对 Keychain service/account、`device.cache`、Typeless 本地数据目录的整理。
+```bash
+node --test test/*.test.js
+```
 
-## 致谢 / Thanks
+---
 
-感谢 [LINUX DO 论坛社区](https://linux.do/) 的关注、反馈与支持。
+## 致谢
+
+- [Jia131313/typeless-toolkit](https://github.com/Jia131313/typeless-toolkit) — 早期代码基础。本仓库已独立演进与发版，**不再跟踪或合并上游**。  
+- [estarpro1022/typeless-reset-device](https://github.com/estarpro1022/typeless-reset-device) — macOS 设备标识相关路径整理。  
+- [LINUX DO](https://linux.do/) — 反馈与支持。
+
+---
 
 ## 免责声明
 
-**本工具集内容仅供 24 小时内的学习与技术交流，请于下载/使用后 24 小时内自行删除。**
+**本工具仅供 24 小时内的学习与技术交流，请于下载/使用后 24 小时内自行删除。**
 
 > [!IMPORTANT]
-> **强烈建议并呼吁大家支持 Typeless 官方的付费充值与订阅服务**。优秀的软件离不开开发团队的持续维护与付出，本工具集仅供个人本地数据同步管理和技术原理研究，切勿规避或损害官方的正当付费机制。
+> **请支持 Typeless 官方付费与订阅。** 本工具只面向个人本机数据管理与技术原理学习，请勿用于规避或损害官方正当付费机制。
 
-- 本项目旨在帮助理解 Electron 应用的 asar 完整性机制、CDP 远程调试、多账号登录态管理等技术原理，仅供个人学习与研究。
-- **不得用于规避 Typeless 的付费机制、违反其服务条款，或任何商业用途。** 不得将本项目用于盈利、贩卖、分发或任何形式的商业传播。
-- Typeless 软件及相关商标、著作权的全部权利归其原始权利人所有，本项目与 Typeless 官方无任何关联、赞助或认可关系。
-- 使用本工具集产生的一切后果（包括但不限于账号封禁、数据丢失、应用损坏、法律责任）由使用者自行承担，作者不承担任何责任。
-- 使用前请先阅读 Typeless 的服务条款；若你的所在地法律或 Typeless 条款禁止此类操作，请勿使用。
-- 继续使用即视为你已阅读并同意上述声明。
+- 旨在理解 Electron asar 完整性、CDP、多账号登录态等；仅供个人学习研究  
+- **不得用于规避付费、违反服务条款，或任何商业用途**（盈利、贩卖、商业分发等）  
+- Typeless 及相关商标、著作权归原权利人；本项目与官方无关联、赞助或背书  
+- 使用后果（账号、数据、应用损坏、法律责任等）由使用者自行承担  
+- 使用前请阅读 Typeless 服务条款；当地法律或条款禁止则请勿使用  
+- 继续使用即视为已阅读并同意本声明  
+
+---
 
 ## License
 
