@@ -75,8 +75,10 @@ open http://127.0.0.1:7788
 
 ### 切号
 
-账号卡片「切换到此号」→ 还原快照 → 重启 Typeless。  
+账号卡片「切换到此号」→ 还原快照 → 重启 Typeless → **自动同步该号词库**。  
 已保存账号之间切换**不要**先重置设备。
+
+同步与「等 Typeless 重启」并行，不额外费时；两件事分别报结果——同步失败（比如该号 token 过期）不影响号已经切好。
 
 ### 词库怎么对齐
 
@@ -209,16 +211,20 @@ codesign --verify --deep --strict /Applications/Typeless.app
 | 路径 | 作用 |
 | --- | --- |
 | `manager.js` / `manager.html` | 管理器后端与页面 |
-| `lib/common.js` | 路径、CDP、API、同步、补丁等 |
+| `lib/common.js` | 路径、CDP、API、同步、版本漂移，并装配下列子模块 |
+| `lib/runtime-backup.js` | 运行数据备份 / 恢复事务 |
+| `lib/paywall-patch.js` | 去弹窗补丁（asar 解析、等长替换、重签名） |
+| `lib/private-fs.js` | 私有目录与原子写入 |
 | `lib/runtime-data.js` | 稳定目录、迁移、权限 |
 | `lib/local-api-security.js` | 会话与请求校验 |
 | `lib/patch-transaction.js` | 补丁事务与回滚 |
 | `typeless-dict-sync.js`、`*.command` | 备用 CLI / 双击入口 |
 | `test/` | 零依赖测试 |
+| `package.json` | 版本号与测试入口，**不声明任何依赖** |
 | `CHANGELOG.md` | 版本说明 |
 
 ```bash
-node --test test/*.test.js
+npm test
 ```
 
 ---

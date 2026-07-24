@@ -17,25 +17,13 @@
  *
  * 注意:脚本会重载一次主窗口以抓取 token;词库同步对账号无破坏性(只增不删)。
  *
- * 共享逻辑已抽到 ./lib/common.js。
+ * 同步本身完全复用 lib/common.js 的 syncAccount()——与管理器走同一套词条归一化
+ * (termKey:去首尾空白 + 大小写折叠),避免两份实现对「什么算同一个词」判断不一致。
  */
 const path = require('path');
 // 用绝对路径 require,确保 cwd 无关
 const C = require(path.join(__dirname, 'lib', 'common'));
-const { curlApi, ensureApp, captureTokenCDP, readMaster, writeMaster, log } = C;
-
-// ---------- 词库 API(基于共享 curlApi) ----------
-async function exportWords(token) {
-  const r = await curlApi('GET', '/user/dictionary/list?size=500', token);
-  if (r.status !== 'OK') throw new Error('导出失败: ' + JSON.stringify(r).slice(0, 200));
-  return (r.data.words || []).map(w => w.term).filter(Boolean);
-}
-async function importWords(token, terms) {
-  if (!terms.length) return { skipped: true };
-  const r = await curlApi('POST', '/user/dictionary/bulk-import', token, { content: terms.join('\n') });
-  if (r.status !== 'OK') throw new Error('导入失败: ' + JSON.stringify(r).slice(0, 200));
-  return r.data;
-}
+const { ensureApp, captureTokenCDP, readMaster, syncAccount, log } = C;
 
 // ---------- 主流程 ----------
 async function main() {
@@ -47,24 +35,12 @@ async function main() {
   const { token, origin, user_id } = await captureTokenCDP();
   log('[sync] 已连接:', origin, '账号 user_id:', user_id);
 
-  // 2. 导出当前账号词库
-  const accountWords = await exportWords(token);
-  log('[sync] 当前账号已有词库:', accountWords.length, '条');
-
-  // 3. 合并进主 CSV(account → master)
-  const masterBefore = readMaster();
-  const masterMerged = writeMaster([...masterBefore, ...accountWords]);
-  log('[sync] 主 CSV 合并后:', masterMerged.length, '条(新增', masterMerged.length - masterBefore.length, ')');
-
-  // 4. 把主 CSV 里该账号缺的词导入(master → account)
-  const accountSet = new Set(accountWords);
-  const missing = masterMerged.filter(w => !accountSet.has(w));
-  log('[sync] 待导入该账号:', missing.length, '条');
-  if (missing.length) {
-    const res = await importWords(token, missing);
-    if (res.skipped) log('[sync]   无需导入');
-    else log('[sync]   导入结果: success=', res.success_count, 'failed=', res.failed_count);
-  }
+  // 2. 同步(导出账号词库 → 合并进主 CSV → 把主 CSV 里缺的词补回账号)
+  const masterBefore = readMaster().length;
+  const r = await syncAccount({ token, user_id });
+  log('[sync] 当前账号已有词库:', r.exported, '条');
+  log('[sync] 主 CSV 合并后:', r.master_count, '条(新增', r.master_count - masterBefore, ')');
+  log('[sync] 已补回该账号:', r.imported, '条');
   log('[sync] 同步完成。各账号词库已对齐到主 CSV。');
 }
 

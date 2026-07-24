@@ -1,0 +1,17 @@
+{
+  "name": "typeless-toolkit-macos",
+  "version": "2.5.0",
+  "private": true,
+  "description": "Typeless (macOS) 本地多账号管理工具:账号切换、词库同步、设备重置、去弹窗补丁",
+  "license": "MIT",
+  "main": "manager.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node manager.js",
+    "sync": "node typeless-dict-sync.js",
+    "test": "node --test \"test/*.test.js\""
+  },
+  "//": "本项目刻意零运行时依赖,不需要 npm install。此文件只提供版本号单一来源与测试入口。"
+}

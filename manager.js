@@ -25,7 +25,7 @@ const {
   saveSnapshot, restoreSnapshot, hasSnapshot, snapshotMtime, tokenExpiryInfo,
   killTypeless, launchTypeless, resetDevice,
   readMaster, writeMaster,
-  curlApi, typelessConnectionStatus, ensureApp, captureTokenCDP,
+  curlApi, assertApiOk, typelessConnectionStatus, ensureApp, captureTokenCDP,
   liveStatus, syncAccount,
   paywallStatus, patchPaywall,
   getTypelessVersion, versionDriftStatus, writeVersionState,
@@ -35,6 +35,8 @@ const {
 } = C;
 
 const PORT = config.manager_port;
+// 版本号唯一来源:package.json。发版只改那里(以及 CHANGELOG 和 git tag)。
+const VERSION = JSON.parse(fs.readFileSync(path.join(C.CODE_DIR, 'package.json'), 'utf8')).version;
 const security = createLocalApiSecurity({ port: PORT });
 const pendingCaptures = new Map();
 const CAPTURE_TTL_MS = 2 * 60 * 1000;
@@ -171,7 +173,7 @@ const server = http.createServer(async (req, res) => {
       security.assertPageRequest(req);
       return send(res, 200, {
         status: 'OK',
-        data: { product: 'typeless-toolkit-manager', state: 'ready', version: '2.4.2' },
+        data: { product: 'typeless-toolkit-manager', state: 'ready', version: VERSION },
       });
     }
     // 前端首页
@@ -382,12 +384,15 @@ const server = http.createServer(async (req, res) => {
       const acc = readAccounts().find(x => x.user_id === id);
       if (!acc) return send(res, 404, { status: 'FAIL', msg: '账号不存在' });
       const master = readMaster();
-      const dl = await curlApi('GET', '/user/dictionary/list?size=500', acc.token);
+      const dl = assertApiOk(await curlApi('GET', '/user/dictionary/list?size=500', acc.token), '读取账号词库');
       const have = new Set((dl.data?.words || []).map(w => termKey(w.term)));
       const missing = master.filter(w => !have.has(termKey(w)));
       let imported = 0;
       if (missing.length) {
-        const r = await curlApi('POST', '/user/dictionary/bulk-import', acc.token, { content: missing.join('\n') });
+        const r = assertApiOk(
+          await curlApi('POST', '/user/dictionary/bulk-import', acc.token, { content: missing.join('\n') }),
+          '导入词库',
+        );
         imported = safeCount(r.data?.success_count);
       }
       return send(res, 200, { status: 'OK', data: { master: master.length, already: master.length - missing.length, imported } });
@@ -401,14 +406,17 @@ const server = http.createServer(async (req, res) => {
       const src = accs.find(x => x.user_id === srcId);
       const dst = accs.find(x => x.user_id === dstId);
       if (!src || !dst) return send(res, 404, { status: 'FAIL', msg: '账号不存在' });
-      const sl = await curlApi('GET', '/user/dictionary/list?size=500', src.token);
+      const sl = assertApiOk(await curlApi('GET', '/user/dictionary/list?size=500', src.token), '读取源账号词库');
       const srcWords = (sl.data?.words || []).map(w => w.term).filter(Boolean);
-      const dl = await curlApi('GET', '/user/dictionary/list?size=500', dst.token);
+      const dl = assertApiOk(await curlApi('GET', '/user/dictionary/list?size=500', dst.token), '读取目标账号词库');
       const have = new Set((dl.data?.words || []).map(w => termKey(w.term)));
       const missing = srcWords.filter(w => !have.has(termKey(w)));
       let imported = 0;
       if (missing.length) {
-        const r = await curlApi('POST', '/user/dictionary/bulk-import', dst.token, { content: missing.join('\n') });
+        const r = assertApiOk(
+          await curlApi('POST', '/user/dictionary/bulk-import', dst.token, { content: missing.join('\n') }),
+          '导入词库',
+        );
         imported = safeCount(r.data?.success_count);
       }
       return send(res, 200, { status: 'OK', data: { src_count: srcWords.length, imported, already: srcWords.length - missing.length } });
@@ -426,7 +434,7 @@ const server = http.createServer(async (req, res) => {
       const id = decodeURIComponent(p.split('/')[3]);
       const acc = readAccounts().find(x => x.user_id === id);
       if (!acc) return send(res, 404, { status: 'FAIL', msg: '账号不存在' });
-      const dl = await curlApi('GET', '/user/dictionary/list?size=500', acc.token);
+      const dl = assertApiOk(await curlApi('GET', '/user/dictionary/list?size=500', acc.token), '读取账号词库');
       return send(res, 200, { status: 'OK', data: publicDictionary(dl.data) });
     }
     // 单账号同步
@@ -455,7 +463,10 @@ const server = http.createServer(async (req, res) => {
       const b = await readObjectBody(req);
       const terms = Array.isArray(b.terms) ? b.terms.map(s => String(s || '').trim()).filter(Boolean) : [];
       if (!terms.length) return send(res, 400, { status: 'FAIL', msg: '没有可添加的词' });
-      const r = await curlApi('POST', '/user/dictionary/bulk-import', acc.token, { content: terms.join('\n') });
+      const r = assertApiOk(
+        await curlApi('POST', '/user/dictionary/bulk-import', acc.token, { content: terms.join('\n') }),
+        '批量加词',
+      );
       return send(res, 200, { status: 'OK', data: { requested: terms.length, imported: safeCount(r.data?.success_count) } });
     }
     // 给账号加单个词
@@ -466,18 +477,22 @@ const server = http.createServer(async (req, res) => {
       const b = await readObjectBody(req);
       const term = boundedText(b.term, 500, '词条');
       if (!term) return send(res, 400, { status: 'FAIL', msg: '词条不能为空' });
-      await curlApi('POST', '/user/dictionary/add', acc.token, { term });
+      assertApiOk(await curlApi('POST', '/user/dictionary/add', acc.token, { term }), '添加词条');
       return send(res, 200, { status: 'OK', data: { term } });
     }
     // 删账号单个词(按 term)
     if (m === 'DELETE' && p.startsWith('/api/accounts/') && p.endsWith('/word')) {
       const id = decodeURIComponent(p.split('/')[3]);
       const acc = readAccounts().find(x => x.user_id === id);
+      if (!acc) return send(res, 404, { status: 'FAIL', msg: '账号不存在' });
       const term = u.searchParams.get('term');
-      const dl = await curlApi('GET', '/user/dictionary/list?size=500', acc.token);
+      const dl = assertApiOk(await curlApi('GET', '/user/dictionary/list?size=500', acc.token), '读取账号词库');
       const w = (dl.data?.words || []).find(x => x.term === term);
       if (!w) return send(res, 404, { status: 'FAIL', msg: '词条不存在' });
-      await curlApi('POST', '/user/dictionary/delete', acc.token, { user_dictionary_id: w.user_dictionary_id });
+      assertApiOk(
+        await curlApi('POST', '/user/dictionary/delete', acc.token, { user_dictionary_id: w.user_dictionary_id }),
+        '删除词条',
+      );
       let stillExists = true;
       let absentHits = 0;
       for (let i = 0; i < 10; i++) {
@@ -532,6 +547,7 @@ function startServer() {
 if (require.main === module) startServer();
 
 module.exports = {
+  VERSION,
   publicAccount,
   publicCapture,
   publicDictionary,

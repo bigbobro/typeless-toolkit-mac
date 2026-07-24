@@ -10,8 +10,8 @@ typeless-version.json
 # 本地配置覆盖(用户私有,不进 git)
 config.local.json
 
-# 架构/暗知识文档(含补丁机理,仅本地留存,不公开)
-docs/architecture.md
+# 本地文档
+docs/
 
 # 依赖
 node_modules/

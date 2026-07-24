@@ -71,9 +71,13 @@ test('真实 manager 只接受页面注入的本机会话,无 CORS,坏 JSON 不�
   const health = await waitForHealth(origin, child, logs);
   assert.strictEqual(health.headers.get('access-control-allow-origin'), null);
   assert.match(health.headers.get('content-security-policy'), /frame-ancestors 'none'/);
+  // 版本号断言跟着 package.json 走,发版时不必再改测试
+  const expectedVersion = JSON.parse(
+    fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'),
+  ).version;
   assert.deepStrictEqual(await health.json(), {
     status: 'OK',
-    data: { product: 'typeless-toolkit-manager', state: 'ready', version: '2.4.2' },
+    data: { product: 'typeless-toolkit-manager', state: 'ready', version: expectedVersion },
   });
 
   const malformedTarget = await rawHttp(port,
