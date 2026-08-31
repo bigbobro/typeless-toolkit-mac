@@ -67,7 +67,7 @@ test('连接状态只区分管理端口是否可达', async () => {
 
 test('管理端口已连接时不重启 Typeless', async () => {
   const result = await ensureApp({
-    portUp: async () => true,
+    probePort: async () => ({ status: 'ready' }),
     killTypeless: () => assert.fail('不应关闭 Typeless'),
     launchTypeless: () => assert.fail('不应启动 Typeless'),
   });
@@ -84,7 +84,7 @@ test('管理端口未连接时重启并等待端口就绪', async () => {
   let stops = 0;
   let starts = 0;
   const result = await ensureApp({
-    portUp: async () => ++probes >= 3,
+    probePort: async () => ({ status: ++probes >= 3 ? 'ready' : 'down' }),
     killTypeless: () => { stops++; },
     launchTypeless: () => { starts++; },
     sleep: async () => {},
@@ -105,7 +105,7 @@ test('管理端口等待超时必须失败，不能误报已就绪', async () =>
   let starts = 0;
   await assert.rejects(
     ensureApp({
-      portUp: async () => { probes++; return false; },
+      probePort: async () => { probes++; return { status: 'down' }; },
       killTypeless: () => { stops++; },
       launchTypeless: () => { starts++; },
       sleep: async () => {},

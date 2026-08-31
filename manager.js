@@ -244,7 +244,7 @@ const server = http.createServer(async (req, res) => {
         });
       }
       try {
-        const c = await captureTokenCDP(null, false);
+        const c = await captureTokenCDP(false);
         return send(res, 200, { status: 'OK', data: publicCapture(c) });
       }
       catch (e) {
@@ -550,13 +550,9 @@ function startServer() {
 if (require.main === module) startServer();
 
 module.exports = {
-  VERSION,
   publicAccount,
   publicCapture,
   publicDictionary,
   publicLiveStatus,
   safeCount,
-  security,
-  server,
-  startServer,
 };
