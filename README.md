@@ -58,6 +58,12 @@ open http://127.0.0.1:7788
 
 单独拉起带调试口的 Typeless 可用：`启动Typeless(带调试端口).command`。
 
+**调试口默认是 9222，容易被别的工具抢**（浏览器自动化框架、Chrome 远程调试等都爱用这个端口）。端口被占时 Electron 只会静默绑不上，Typeless 看着正常但连不上管理连接。工具现在会直接报「管理端口已被其它程序占用」，不再反复重启 Typeless。解法二选一：退出占用端口的程序，或在 `config.local.json` 里把 `cdp_port` 换成没人用的端口（如 9333）。想确认谁占着：
+
+```bash
+lsof -nP -iTCP:9222 -sTCP:LISTEN
+```
+
 ---
 
 ## 用法

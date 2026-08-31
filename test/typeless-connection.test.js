@@ -13,6 +13,7 @@ process.env.TYPELESS_DATA_DIR = DATA_DIR;
 const {
   CDP_PORT,
   ensureApp,
+  probeCdpPort,
   selectTypelessCdpTarget,
   typelessConnectionStatus,
 } = require('../lib/common');
@@ -117,4 +118,40 @@ test('管理端口等待超时必须失败，不能误报已就绪', async () =>
   assert.strictEqual(probes, 3);
   assert.strictEqual(stops, 1);
   assert.strictEqual(starts, 1);
+});
+
+test('probeCdpPort:没人监听算 down,别的程序占用算 foreign', async () => {
+  const refused = async () => { throw new Error('connect ECONNREFUSED'); };
+  assert.strictEqual((await probeCdpPort(CDP_PORT, refused)).status, 'down');
+
+  // Chrome 占用时的真实表现:端口通,但 /json/version 返回 404
+  const notFound = async () => ({ ok: false, status: 404 });
+  assert.strictEqual((await probeCdpPort(CDP_PORT, notFound)).status, 'foreign');
+
+  // 监听的是 CDP,但 User-Agent 不是 Typeless
+  const otherElectron = async () => ({
+    ok: true,
+    json: async () => ({ 'User-Agent': 'Mozilla/5.0 SomeOtherApp/1.0 Chrome/130 Electron/33' }),
+  });
+  assert.strictEqual((await probeCdpPort(CDP_PORT, otherElectron)).status, 'foreign');
+
+  // 回应的根本不是 JSON
+  const notJson = async () => ({ ok: true, json: async () => { throw new Error('bad json'); } });
+  assert.strictEqual((await probeCdpPort(CDP_PORT, notJson)).status, 'foreign');
+});
+
+test('管理端口被别的程序占用时必须报错,不能杀 Typeless 反复重启', async () => {
+  let stops = 0;
+  let starts = 0;
+  await assert.rejects(
+    ensureApp({
+      probePort: async () => ({ status: 'foreign', detail: '该端口回应 HTTP 404' }),
+      killTypeless: () => { stops++; },
+      launchTypeless: () => { starts++; },
+      sleep: async () => {},
+    }),
+    (error) => error.code === 'CDP_PORT_CONFLICT' && /被其它程序占用/.test(error.message),
+  );
+  assert.strictEqual(stops, 0, '端口冲突时不应关闭 Typeless');
+  assert.strictEqual(starts, 0, '端口冲突时不应重启 Typeless');
 });
