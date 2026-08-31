@@ -189,12 +189,15 @@ const server = http.createServer(async (req, res) => {
     if (m === 'GET' && p === '/api/accounts') {
       const accs = readAccounts();
       const live = await Promise.all(accs.map(a => liveStatus(a).catch(e => ({ token_valid: false, _err: e.message }))));
-      const data = accs.map((a, i) => publicAccount(a, {
-        live: publicLiveStatus(live[i]),
-        has_snapshot: hasSnapshot(a.user_id),
-        snapshot_mtime: hasSnapshot(a.user_id) ? snapshotMtime(a.user_id) : null,
-        ...tokenExpiryInfo(a.token),
-      }));
+      const data = accs.map((a, i) => {
+        const has = hasSnapshot(a.user_id);   // 每个账号只探一次,下面复用
+        return publicAccount(a, {
+          live: publicLiveStatus(live[i]),
+          has_snapshot: has,
+          snapshot_mtime: has ? snapshotMtime(a.user_id) : null,
+          ...tokenExpiryInfo(a.token),
+        });
+      });
       return send(res, 200, { status: 'OK', data });
     }
     // 本地运行数据备份状态(accounts/profile/主词库)
