@@ -31,6 +31,7 @@ const {
   getTypelessVersion, versionDriftStatus, writeVersionState,
   accountMetaFromUserInfo,
   termKey, safeCount, assertSafeAccountId,
+  DICT_LIST_PATH, listDictionary, dictDiff, importMissingTerms,
   log, sleep,
 } = C;
 
@@ -60,6 +61,19 @@ async function readObjectBody(req, limitBytes) {
     throw new LocalApiError(400, 'INVALID_INPUT', 'JSON 顶层必须是对象');
   }
   return body;
+}
+
+// 带 :id 的路由此前各自手写「取 id → 查账号 → 404」三段;取 id 还有两种写法
+// (p.split('/')[3] 与 p.split('/').pop())。收成两个 helper,顺带把 404 并进统一的
+// 错误出口(响应因此多一个 code 字段,与其余错误一致)。
+function pathAccountId(p) {
+  return decodeURIComponent(p.split('/')[3]);
+}
+
+function requireAccount(id) {
+  const acc = readAccounts().find(x => x.user_id === id);
+  if (!acc) throw new LocalApiError(404, 'ACCOUNT_NOT_FOUND', '账号不存在');
+  return acc;
 }
 
 function boundedText(value, max, field) {
@@ -300,13 +314,13 @@ const server = http.createServer(async (req, res) => {
     }
     // 手动更新当前账号快照(当前 Typeless 登录态 -> 该账号)
     if (m === 'POST' && p.startsWith('/api/accounts/') && p.endsWith('/snapshot')) {
-      const id = decodeURIComponent(p.split('/')[3]);
+      const id = pathAccountId(p);
       saveSnapshot(id);
       return send(res, 200, { status: 'OK', msg: '快照已保存', has_snapshot: hasSnapshot(id) });
     }
     // 切换到此账号(还原快照 + 重启 Typeless)
     if (m === 'POST' && p.startsWith('/api/accounts/') && p.endsWith('/switch')) {
-      const id = decodeURIComponent(p.split('/')[3]);
+      const id = pathAccountId(p);
       if (!hasSnapshot(id)) return send(res, 400, { status: 'FAIL', msg: '该账号无快照,请先在 Typeless 登录该号后点「更新快照」' });
       await killTypeless(); await sleep(1500);
       restoreSnapshot(id);
@@ -383,21 +397,11 @@ const server = http.createServer(async (req, res) => {
     }
     // 把主词库导入此账号(单向 master -> account,不导出)
     if (m === 'POST' && p.startsWith('/api/accounts/') && p.endsWith('/import-master')) {
-      const id = decodeURIComponent(p.split('/')[3]);
-      const acc = readAccounts().find(x => x.user_id === id);
-      if (!acc) return send(res, 404, { status: 'FAIL', msg: '账号不存在' });
+      const acc = requireAccount(pathAccountId(p));
       const master = readMaster();
-      const dl = assertApiOk(await curlApi('GET', '/user/dictionary/list?size=500', acc.token), '读取账号词库');
-      const have = new Set((dl.data?.words || []).map(w => termKey(w.term)));
-      const missing = master.filter(w => !have.has(termKey(w)));
-      let imported = 0;
-      if (missing.length) {
-        const r = assertApiOk(
-          await curlApi('POST', '/user/dictionary/bulk-import', acc.token, { content: missing.join('\n') }),
-          '导入词库',
-        );
-        imported = safeCount(r.data?.success_count);
-      }
+      const have = ((await listDictionary(acc.token)).words || []).map(w => w.term);
+      const missing = dictDiff(master, have);
+      const imported = await importMissingTerms(acc.token, missing);
       return send(res, 200, { status: 'OK', data: { master: master.length, already: master.length - missing.length, imported } });
     }
     // 从源账号复制词库到此账号
@@ -405,28 +409,17 @@ const server = http.createServer(async (req, res) => {
       const parts = p.split('/');
       const dstId = decodeURIComponent(parts[3]);
       const srcId = decodeURIComponent(parts[5]);
-      const accs = readAccounts();
-      const src = accs.find(x => x.user_id === srcId);
-      const dst = accs.find(x => x.user_id === dstId);
-      if (!src || !dst) return send(res, 404, { status: 'FAIL', msg: '账号不存在' });
-      const sl = assertApiOk(await curlApi('GET', '/user/dictionary/list?size=500', src.token), '读取源账号词库');
-      const srcWords = (sl.data?.words || []).map(w => w.term).filter(Boolean);
-      const dl = assertApiOk(await curlApi('GET', '/user/dictionary/list?size=500', dst.token), '读取目标账号词库');
-      const have = new Set((dl.data?.words || []).map(w => termKey(w.term)));
-      const missing = srcWords.filter(w => !have.has(termKey(w)));
-      let imported = 0;
-      if (missing.length) {
-        const r = assertApiOk(
-          await curlApi('POST', '/user/dictionary/bulk-import', dst.token, { content: missing.join('\n') }),
-          '导入词库',
-        );
-        imported = safeCount(r.data?.success_count);
-      }
+      const src = requireAccount(srcId);
+      const dst = requireAccount(dstId);
+      const srcWords = ((await listDictionary(src.token, '读取源账号词库')).words || []).map(w => w.term).filter(Boolean);
+      const have = ((await listDictionary(dst.token, '读取目标账号词库')).words || []).map(w => w.term);
+      const missing = dictDiff(srcWords, have);
+      const imported = await importMissingTerms(dst.token, missing);
       return send(res, 200, { status: 'OK', data: { src_count: srcWords.length, imported, already: srcWords.length - missing.length } });
     }
     // 删除账号
     if (m === 'DELETE' && /^\/api\/accounts\/[^/]+$/.test(p)) {
-      const id = decodeURIComponent(p.split('/').pop());
+      const id = pathAccountId(p);
       let accs = readAccounts();
       accs = accs.filter(x => x.user_id !== id);
       writeAccounts(accs);
@@ -434,17 +427,12 @@ const server = http.createServer(async (req, res) => {
     }
     // 单账号词库
     if (m === 'GET' && p.startsWith('/api/accounts/') && p.endsWith('/dictionary')) {
-      const id = decodeURIComponent(p.split('/')[3]);
-      const acc = readAccounts().find(x => x.user_id === id);
-      if (!acc) return send(res, 404, { status: 'FAIL', msg: '账号不存在' });
-      const dl = assertApiOk(await curlApi('GET', '/user/dictionary/list?size=500', acc.token), '读取账号词库');
-      return send(res, 200, { status: 'OK', data: publicDictionary(dl.data) });
+      const acc = requireAccount(pathAccountId(p));
+      return send(res, 200, { status: 'OK', data: publicDictionary(await listDictionary(acc.token)) });
     }
     // 单账号同步
     if (m === 'POST' && p.startsWith('/api/accounts/') && p.endsWith('/sync')) {
-      const id = decodeURIComponent(p.split('/')[3]);
-      const acc = readAccounts().find(x => x.user_id === id);
-      if (!acc) return send(res, 404, { status: 'FAIL', msg: '账号不存在' });
+      const acc = requireAccount(pathAccountId(p));
       const r = await syncAccount(acc);
       return send(res, 200, { status: 'OK', data: r });
     }
@@ -460,9 +448,7 @@ const server = http.createServer(async (req, res) => {
     }
     // 给账号批量加词(多行,复用 bulk-import)
     if (m === 'POST' && p.startsWith('/api/accounts/') && p.endsWith('/words')) {
-      const id = decodeURIComponent(p.split('/')[3]);
-      const acc = readAccounts().find(x => x.user_id === id);
-      if (!acc) return send(res, 404, { status: 'FAIL', msg: '账号不存在' });
+      const acc = requireAccount(pathAccountId(p));
       const b = await readObjectBody(req);
       const terms = Array.isArray(b.terms) ? b.terms.map(s => String(s || '').trim()).filter(Boolean) : [];
       if (!terms.length) return send(res, 400, { status: 'FAIL', msg: '没有可添加的词' });
@@ -474,9 +460,7 @@ const server = http.createServer(async (req, res) => {
     }
     // 给账号加单个词
     if (m === 'POST' && p.startsWith('/api/accounts/') && p.endsWith('/word')) {
-      const id = decodeURIComponent(p.split('/')[3]);
-      const acc = readAccounts().find(x => x.user_id === id);
-      if (!acc) return send(res, 404, { status: 'FAIL', msg: '账号不存在' });
+      const acc = requireAccount(pathAccountId(p));
       const b = await readObjectBody(req);
       const term = boundedText(b.term, 500, '词条');
       if (!term) return send(res, 400, { status: 'FAIL', msg: '词条不能为空' });
@@ -485,12 +469,9 @@ const server = http.createServer(async (req, res) => {
     }
     // 删账号单个词(按 term)
     if (m === 'DELETE' && p.startsWith('/api/accounts/') && p.endsWith('/word')) {
-      const id = decodeURIComponent(p.split('/')[3]);
-      const acc = readAccounts().find(x => x.user_id === id);
-      if (!acc) return send(res, 404, { status: 'FAIL', msg: '账号不存在' });
+      const acc = requireAccount(pathAccountId(p));
       const term = u.searchParams.get('term');
-      const dl = assertApiOk(await curlApi('GET', '/user/dictionary/list?size=500', acc.token), '读取账号词库');
-      const w = (dl.data?.words || []).find(x => x.term === term);
+      const w = ((await listDictionary(acc.token)).words || []).find(x => x.term === term);
       if (!w) return send(res, 404, { status: 'FAIL', msg: '词条不存在' });
       assertApiOk(
         await curlApi('POST', '/user/dictionary/delete', acc.token, { user_dictionary_id: w.user_dictionary_id }),
@@ -500,7 +481,7 @@ const server = http.createServer(async (req, res) => {
       let absentHits = 0;
       for (let i = 0; i < 10; i++) {
         await sleep(500);
-        const check = await curlApi('GET', '/user/dictionary/list?size=500', acc.token);
+        const check = await curlApi('GET', DICT_LIST_PATH, acc.token);
         if (!Array.isArray(check.data?.words)) continue;
         stillExists = check.data.words.some(x => x.term === term);
         absentHits = stillExists ? 0 : absentHits + 1;
