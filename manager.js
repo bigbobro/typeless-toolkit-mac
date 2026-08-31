@@ -308,7 +308,7 @@ const server = http.createServer(async (req, res) => {
     if (m === 'POST' && p.startsWith('/api/accounts/') && p.endsWith('/switch')) {
       const id = decodeURIComponent(p.split('/')[3]);
       if (!hasSnapshot(id)) return send(res, 400, { status: 'FAIL', msg: '该账号无快照,请先在 Typeless 登录该号后点「更新快照」' });
-      killTypeless(); await sleep(1500);
+      await killTypeless(); await sleep(1500);
       restoreSnapshot(id);
       launchTypeless();
       return send(res, 200, { status: 'OK', msg: '已切换并重启 Typeless' });
@@ -361,7 +361,7 @@ const server = http.createServer(async (req, res) => {
     // 解除升级弹窗(打 app.asar + Info.plist 完整性补丁,失败自动从备份还原)
     if (m === 'POST' && p === '/api/patch-paywall') {
       const dataBackup = backupRuntimeData('patch-paywall');
-      killTypeless(); await sleep(1500);
+      await killTypeless(); await sleep(1500);
       try {
         const r = await patchPaywall();
         if (dataBackup) r.manager_data_backup = dataBackup;
