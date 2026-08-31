@@ -200,6 +200,48 @@ test('恢复会先自动备份当前数据(before-restore 落到 runtime-backups
   assert.ok(manifest.files.every(file => /^[a-f0-9]{64}$/.test(file.sha256)));
 });
 
+// lib/private-fs.js 的文件头把「目录 0700 / 文件 0600」写成了这一层的不变量,但在此之前
+// 整个套件对它零直接断言:没有测试 require 过 private-fs,也没有断言过经它写出的权限。
+// 这是假覆盖 —— 它被大量执行(96.67% 行覆盖)却没人检查结果。变异测试可证:把 private-fs
+// 的 0700/0600 全改成 0777/0666,套件依然全绿。以下断言就是为「统一到 private-fs」
+// 那次重构准备的安全网:先有断言,再动实现。
+test('经 private-fs 写出的运行备份:目录 0700、文件 0600', () => {
+  seedRuntimeData();
+  const backupDir = C.backupRuntimeData('perm-check');
+  const mode = p => fs.statSync(p).mode & 0o777;
+
+  assert.strictEqual(mode(backupDir), 0o700, '备份目录必须 0700');
+  assert.strictEqual(mode(path.join(backupDir, 'manifest.json')), 0o600, 'manifest.json 必须 0600');
+  assert.strictEqual(mode(path.join(backupDir, 'accounts.json')), 0o600, 'accounts.json 含明文 token,必须 0600');
+
+  const profilesDir = path.join(backupDir, 'profiles');
+  if (fs.existsSync(profilesDir)) {
+    assert.strictEqual(mode(profilesDir), 0o700, 'profiles/ 必须 0700');
+    for (const uid of fs.readdirSync(profilesDir)) {
+      const sub = path.join(profilesDir, uid);
+      if (!fs.statSync(sub).isDirectory()) continue;
+      assert.strictEqual(mode(sub), 0o700, `profiles/${uid} 必须 0700`);
+      for (const f of fs.readdirSync(sub)) {
+        assert.strictEqual(mode(path.join(sub, f)), 0o600, `profiles/${uid}/${f} 必须 0600`);
+      }
+    }
+  }
+});
+
+test('secureTree 拒绝符号链接,不会顺着链接改到运行数据之外', () => {
+  const { secureTree } = require('../lib/private-fs.js');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tt-symlink-'));
+  const outside = path.join(root, 'outside.txt');
+  fs.writeFileSync(outside, 'x', { mode: 0o644 });
+  const guarded = path.join(root, 'guarded');
+  fs.mkdirSync(guarded);
+  fs.symlinkSync(outside, path.join(guarded, 'link.txt'));
+
+  assert.throws(() => secureTree(guarded), /符号链接/, '符号链接必须被拒绝');
+  assert.strictEqual(fs.statSync(outside).mode & 0o777, 0o644, '链接目标不得被改权限');
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
 test('运行备份只在 staging 完整复制和校验后发布,并以内容摘要判断状态', () => {
   seedRuntimeData();
   const backupDir = C.backupRuntimeData('manual');
