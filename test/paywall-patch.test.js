@@ -7,7 +7,8 @@
  * **决定**都来自这里的纯函数,而这些决定一旦错了就是 Typeless 闪退:
  *   - readAsarHeader:数据区起点算错一个字节 → 所有文件偏移集体错位
  *   - findPaywallTarget:选错文件 → 改到无关 bundle
- *   - getEffectivePaywallReplacements:替换串长度不等 → 同样错位
+ *   - getEffectivePaywallReplacements:替换串长度不等 → 原地覆写写坏 renderer,
+ *     而补丁仍会一路报成功(后续 hash 与签名都按损坏后的内容重算)
  *
  * 这里用手工构造的 asar buffer 离线验证,不需要装 Typeless。
  */
@@ -159,7 +160,7 @@ test('自动识别出的替换必须严格等长 —— 这是不写坏 asar 的
     assert.strictEqual(
       Buffer.byteLength(from, 'utf8'),
       Buffer.byteLength(to, 'utf8'),
-      `替换长度不等会让 asar 内所有文件偏移错位: ${from} -> ${to}`,
+      `替换长度不等会原地写坏 renderer,且补丁仍会报成功: ${from} -> ${to}`,
     );
   }
 });
@@ -210,3 +211,43 @@ test('关闭自动识别后不再扫描内容,只认 config', () => {
   assert.deepStrictEqual(replacements, []);
   assert.strictEqual(source, 'config');
 });
+
+// 自动识别分支一直有等长校验(跳过不等长候选),config 分支此前完全没有 ——
+// 手写进 config.local.json 的不等长替换会被原地覆写,而后续 per-file hash、
+// asar 头 hash、重签名都按损坏后的内容重算,补丁一路报成功。必须在写入前挡住。
+test('config 配置的替换不等长时必须抛错,不能放行到写入阶段', () => {
+  const cfg = { ...AUTO, replacements: [['gn(_0x12ab)', '(0,_0x12ab)EXTRA']] };
+  assert.throws(
+    () => getEffectivePaywallReplacements(Buffer.from(PAYWALL_SRC), cfg),
+    /必须等长/,
+    '不等长的 config 替换必须报错,否则会写坏 renderer 却报成功',
+  );
+});
+
+test('config 替换过短同样必须抛错,并报出两侧字节数', () => {
+  const cfg = { ...AUTO, replacements: [['gn(_0x12ab)', '(0,_0x1)']] };
+  assert.throws(
+    () => getEffectivePaywallReplacements(Buffer.from(PAYWALL_SRC), cfg),
+    (err) => /11 字节/.test(err.message) && /8 字节/.test(err.message),
+    '错误信息要给出两侧字节数,用户才知道该补几个字符',
+  );
+});
+
+test('不等长校验早于「config 替换是否存在于内容」的判断', () => {
+  // from 压根不在内容里,旧行为会静默回落到自动识别、把坏配置藏起来
+  const cfg = { ...AUTO, replacements: [['zz(_0xNOPE)', '(0,_0xNOPE)TOOLONG']] };
+  assert.throws(
+    () => getEffectivePaywallReplacements(Buffer.from(PAYWALL_SRC), cfg),
+    /必须等长/,
+    '坏配置不该被自动识别的结果掩盖',
+  );
+});
+
+test('多字节字符按字节数而非字符数校验', () => {
+  // '中' 是 3 字节;'abc' 是 3 字节 —— 字符数不等但字节数相等,应放行
+  const src = "if(_0xab['type']==='paywall')中(_0xab);else next(_0xab);";
+  const cfg = { ...AUTO, auto_detect_replacements: false, replacements: [['中', 'abc']] };
+  const { replacements } = getEffectivePaywallReplacements(Buffer.from(src), cfg);
+  assert.deepStrictEqual(replacements, [['中', 'abc']], '字节数相等就该放行');
+});
+
