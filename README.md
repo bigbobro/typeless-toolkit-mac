@@ -227,15 +227,15 @@ codesign --verify --deep --strict /Applications/Typeless.app
 | 路径 | 作用 |
 | --- | --- |
 | `manager.js` / `manager.html` | 管理器后端与页面 |
-| `lib/common.js` | 账号、快照、API、同步、版本漂移，并装配下列子模块 |
+| `lib/common.js` | 账号、快照、API、同步、版本漂移；装配 paths / private-fs / cdp / runtime-backup / paywall-patch 并统一对外转发 |
 | `lib/paths.js` | 路径探测与配置加载（启动时一次算好） |
 | `lib/cdp.js` | CDP 抓 token（端口探测、目标校验、注入捕获） |
 | `lib/runtime-backup.js` | 运行数据备份 / 恢复事务 |
 | `lib/paywall-patch.js` | 去弹窗补丁（asar 解析、等长替换、重签名） |
 | `lib/private-fs.js` | 私有目录与原子写入 |
 | `lib/runtime-data.js` | 稳定目录、迁移、权限 |
-| `lib/local-api-security.js` | 会话与请求校验 |
-| `lib/patch-transaction.js` | 补丁事务与回滚 |
+| `lib/local-api-security.js` | 会话与请求校验（由 `manager.js` 直接使用） |
+| `lib/patch-transaction.js` | 补丁事务与回滚（由 `lib/paywall-patch.js` 使用） |
 | `typeless-dict-sync.js`、`*.command` | 备用 CLI / 双击入口 |
 | `test/` | 零依赖测试（105 个用例，脱机可跑） |
 | `.github/workflows/` | CI：macOS + Node 22 跑 `npm test` |
