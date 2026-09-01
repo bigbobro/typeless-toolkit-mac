@@ -1,6 +1,6 @@
 {
   "name": "typeless-toolkit-macos",
-  "version": "2.5.0",
+  "version": "2.6.0",
   "private": true,
   "description": "Typeless (macOS) 本地多账号管理工具:账号切换、词库同步、设备重置、去弹窗补丁",
   "license": "MIT",
