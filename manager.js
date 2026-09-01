@@ -32,6 +32,7 @@ const {
   accountMetaFromUserInfo,
   termKey, safeCount, assertSafeAccountId,
   DICT_LIST_PATH, listDictionary, dictDiff, importMissingTerms,
+  readCurrentLogin,
   log, sleep,
 } = C;
 
@@ -257,19 +258,16 @@ const server = http.createServer(async (req, res) => {
           data: connection,
         });
       }
-      try {
-        const c = await captureTokenCDP(false);
-        return send(res, 200, { status: 'OK', data: publicCapture(c) });
-      }
-      catch (e) {
-        const latest = await typelessConnectionStatus();
-        return send(res, 200, {
-          status: 'FAIL',
-          code: latest.cdp_reachable ? 'CURRENT_ACCOUNT_UNAVAILABLE' : 'MANAGEMENT_CONNECTION_REQUIRED',
-          msg: latest.cdp_reachable ? e.message : 'Typeless 管理连接已断开',
-          data: latest,
-        });
-      }
+      // 从磁盘读,不 Page.reload —— 注册向导每 4 秒轮询这条路由,此前每轮都会把用户
+      // 正在填的 Typeless 注册页刷掉。需要 token 的是 /api/capture,不是这里。
+      const login = readCurrentLogin();
+      if (login) return send(res, 200, { status: 'OK', data: publicCapture(login) });
+      return send(res, 200, {
+        status: 'FAIL',
+        code: 'CURRENT_ACCOUNT_UNAVAILABLE',
+        msg: 'Typeless 当前未登录任何账号',
+        data: connection,
+      });
     }
     // 抓取当前账号(准备添加)
     if (m === 'POST' && p === '/api/capture') {
