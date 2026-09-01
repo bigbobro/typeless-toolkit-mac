@@ -347,7 +347,9 @@ const server = http.createServer(async (req, res) => {
       if (cur) writeVersionState(cur);
       return send(res, 200, { status: 'OK', data: versionDriftStatus() });
     }
-    // 诊断 / 健康检查(只读聚合:路径/端口/登录/补丁状态/数据目录)
+    // 诊断 / 健康检查(只读聚合:路径/端口/账号数/数据目录)
+    // 注意不含补丁状态与当前登录:页面上那两块分别来自另一次 GET /api/paywall-status
+    // 与前端缓存,这里不调 paywallStatus / captureTokenCDP。
     if (m === 'GET' && p === '/api/diagnostics') {
       const ex = (x) => { try { return !!x && fs.existsSync(x); } catch (e) { return false; } };
       const connection = await typelessConnectionStatus();

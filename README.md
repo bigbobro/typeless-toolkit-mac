@@ -1,5 +1,7 @@
 # Typeless Toolkit for macOS
 
+[![test](https://github.com/bigbobro/typeless-toolkit-mac/actions/workflows/test.yml/badge.svg)](https://github.com/bigbobro/typeless-toolkit-mac/actions/workflows/test.yml)
+
 给 **macOS 上的 Typeless** 用的本机管理器：把多个账号收在一个页面里，切号、对齐词库、处理设备限制、去掉升级/会员弹窗。数据只留在本机，打开浏览器操作，不用注册云端、也不用 `npm install`。
 
 **只做 Mac。** 路径探测、Keychain、codesign、稳定数据目录都按 macOS 桌面端设计；不维护其他平台。
@@ -15,7 +17,7 @@
 - **多账号在同一页**：保存登录 token 和本机快照；卡片上能看到额度、token 大约还剩几天、快照是多久前存的。
 - **切号不折腾设备**：点「切换到此号」即还原该号快照并重启 Typeless。设备 ID 重置只留给「被设备限制挡住」的时候，不是切号步骤。
 - **加新号有向导**：注册引导会按「回到登录页 → 在 Typeless 注册登录 → 抓回管理器」走；本周额度用满时顶部也会提示可以新开一号。
-- **词库只增不删**：「全部同步」把各号个人词并进本地主词库，再把缺的导回去，最后对齐到并集；支持单词增删和批量加词。
+- **词库只增不删**：「全部同步」把各号个人词并进本地主词库，再把缺的导回去，最后对齐到并集；支持单词增删和批量加词。**注意「删」只对单个账号的云端生效**，主词库会在下次同步时把它灌回来，见「词库怎么对齐」。
 - **数据跟着系统用户，不跟着源码夹**：账号、词库、备份在  
   `~/Library/Application Support/Typeless Toolkit/`。  
   换 release 文件夹、重装源码，只要还是同一台 Mac、同一个 macOS 用户，数据还在。
@@ -95,6 +97,12 @@ lsof -nP -iTCP:9222 -sTCP:LISTEN
 
 「全部同步」时页面会按账号逐步显示进度，而不是只给一条总结果。
 
+> [!WARNING]
+> **删词只删单个账号的云端，不删主词库。** 因为同步只增不删，只要还有**任何一个**账号持有这个词，下次同步就会把它并回主词库、再发回所有账号。要永久删掉一个词，得在**所有持有它的账号**里都删一遍，**再**到「✎ 主词库编辑」删掉那一行。
+> 触发面比想象宽：切号后会自动同步该账号，你不点任何按钮词也会回来。
+
+工具栏另有两个入口：**✎ 主词库编辑** 直接改 `Typeless词库主清单.csv` 的内容（保存即写盘）；**↻ 全部刷新** 重新拉一遍所有账号的额度与状态。
+
 可选 CLI（只动当前登录号、或你要写脚本时）：
 
 ```bash
@@ -166,6 +174,8 @@ node typeless-dict-sync.js
 
 常用键：`typeless_app`、`cdp_port`（默认 9222）、`manager_port`（默认 7788）、`api_base`、`paywall`（自动探测失败再手工填）。
 
+想知道工具实际探测到了哪个 `app.asar`、哪个数据目录，点工具栏的 **◇ 诊断** —— 它是只读的，会把路径、端口、账号数、数据目录一次列出来。
+
 ---
 
 ## 设备限制
@@ -217,7 +227,9 @@ codesign --verify --deep --strict /Applications/Typeless.app
 | 路径 | 作用 |
 | --- | --- |
 | `manager.js` / `manager.html` | 管理器后端与页面 |
-| `lib/common.js` | 路径、CDP、API、同步、版本漂移，并装配下列子模块 |
+| `lib/common.js` | 账号、快照、API、同步、版本漂移，并装配下列子模块 |
+| `lib/paths.js` | 路径探测与配置加载（启动时一次算好） |
+| `lib/cdp.js` | CDP 抓 token（端口探测、目标校验、注入捕获） |
 | `lib/runtime-backup.js` | 运行数据备份 / 恢复事务 |
 | `lib/paywall-patch.js` | 去弹窗补丁（asar 解析、等长替换、重签名） |
 | `lib/private-fs.js` | 私有目录与原子写入 |
@@ -225,9 +237,14 @@ codesign --verify --deep --strict /Applications/Typeless.app
 | `lib/local-api-security.js` | 会话与请求校验 |
 | `lib/patch-transaction.js` | 补丁事务与回滚 |
 | `typeless-dict-sync.js`、`*.command` | 备用 CLI / 双击入口 |
-| `test/` | 零依赖测试 |
+| `test/` | 零依赖测试（105 个用例，脱机可跑） |
+| `.github/workflows/` | CI：macOS + Node 22 跑 `npm test` |
 | `package.json` | 版本号与测试入口，**不声明任何依赖** |
 | `CHANGELOG.md` | 版本说明 |
+| `config.json` | 默认配置（本机覆盖写 `config.local.json`，见「配置」） |
+| `accounts.example.json` | `accounts.json` 的字段样例（真实文件不进 git） |
+| `LICENSE` | MIT |
+| `.gitignore` | 运行数据一律不进 git |
 
 ```bash
 npm test
@@ -244,8 +261,6 @@ npm test
 ---
 
 ## 免责声明
-
-**本工具仅供 24 小时内的学习与技术交流，请于下载/使用后 24 小时内自行删除。**
 
 > [!IMPORTANT]
 > **请支持 Typeless 官方付费与订阅。** 本工具只面向个人本机数据管理与技术原理学习，请勿用于规避或损害官方正当付费机制。

@@ -1,0 +1,18 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    # 这个工具只做 macOS,测试也只在 macOS 上跑
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # 刻意没有 npm ci —— 本项目零运行时依赖,package.json 不声明 dependencies
+      - run: npm test

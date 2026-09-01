@@ -23,6 +23,3 @@ dist/
 *.log
 .DS_Store
 
-# 本地临时数据/外部数据集
-CPA/
-SUB2/
