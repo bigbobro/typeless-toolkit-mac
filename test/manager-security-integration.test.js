@@ -98,8 +98,34 @@ test('真实 manager 只接受页面注入的本机会话,无 CORS,坏 JSON 不�
   assert.ok(match, '页面应包含本次启动的 session secret');
   const secret = JSON.parse(match[1]);
   assert.match(html, /id="launchBtn"[^>]*>⏻ 连接 Typeless<\/button>/);
-  assert.match(html, /const current=await detectCurrent\(true\)/);
-  assert.ok(!html.includes("el.style.opacity='.55'"), '连接恢复后不应残留内联透明度');
+  assert.match(html, /<link rel="stylesheet" href="\/manager\.css">/);
+  assert.match(html, /<script src="\/manager-ui\.js"><\/script>/);
+
+  // 页面的样式与脚本是独立静态文件:同一套安全头、精确的 Content-Type(nosniff 之下类型错了浏览器直接拒载)、
+  // 不含会话密钥(密钥只注入 HTML)。脚本文件里的两条断言是历史回归守卫,随脚本一起搬过来。
+  const css = await fetch(`${origin}/manager.css`);
+  assert.strictEqual(css.status, 200);
+  assert.strictEqual(css.headers.get('content-type'), 'text/css; charset=utf-8');
+  assert.match(css.headers.get('content-security-policy'), /frame-ancestors 'none'/);
+  assert.strictEqual(css.headers.get('x-content-type-options'), 'nosniff');
+  assert.match(await css.text(), /:root\s*\{/);
+
+  const js = await fetch(`${origin}/manager-ui.js`);
+  assert.strictEqual(js.status, 200);
+  assert.strictEqual(js.headers.get('content-type'), 'text/javascript; charset=utf-8');
+  assert.match(js.headers.get('content-security-policy'), /frame-ancestors 'none'/);
+  const script = await js.text();
+  assert.ok(!script.includes(secret), '脚本文件不应含会话密钥');
+  assert.ok(!script.includes('__TYPELESS_MANAGER_SESSION_SECRET__'));
+  assert.match(script, /const current=await detectCurrent\(true\)/);
+  assert.ok(!script.includes("el.style.opacity='.55'"), '连接恢复后不应残留内联透明度');
+
+  const crossSiteAsset = await fetch(`${origin}/manager-ui.js`, {
+    headers: { Origin: 'https://evil.example', 'Sec-Fetch-Site': 'cross-site' },
+  });
+  assert.strictEqual(crossSiteAsset.status, 403);
+  assert.strictEqual((await fetch(`${origin}/manager.html.bak`)).status, 404);
+  assert.strictEqual((await fetch(`${origin}/lib/common.js`)).status, 404);
 
   const current = await fetch(`${origin}/api/current`, {
     headers: { 'x-typeless-session': secret },

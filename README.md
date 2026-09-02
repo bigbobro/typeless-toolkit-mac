@@ -226,7 +226,8 @@ codesign --verify --deep --strict /Applications/Typeless.app
 
 | 路径 | 作用 |
 | --- | --- |
-| `manager.js` / `manager.html` | 管理器后端与页面 |
+| `manager.js` | 管理器后端 |
+| `manager.html` / `manager.css` / `manager-ui.js` | 管理器页面（结构 / 样式 / 脚本） |
 | `lib/common.js` | 账号、快照、API、同步、版本漂移；装配 paths / private-fs / cdp / runtime-backup / paywall-patch 并统一对外转发 |
 | `lib/paths.js` | 路径探测与配置加载（启动时一次算好） |
 | `lib/cdp.js` | CDP 抓 token（端口探测、目标校验、注入捕获） |

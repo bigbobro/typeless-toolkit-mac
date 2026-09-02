@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Typeless 多账号管理器 —— 本地后端服务
- * 提供 HTTP API 供前端 (manager.html) 调用;复用 CDP 抓 token + curl 调 Typeless API。
+ * 提供 HTTP API 供前端 (manager.html + manager.css + manager-ui.js) 调用;复用 CDP 抓 token + curl 调 Typeless API。
  * 数据:accounts.json (账号+token,明文) + Typeless词库主清单.csv (主词库)
  *
  * 共享逻辑已抽到 ./lib/common.js,本文件只保留 HTTP 路由层。
@@ -42,6 +42,11 @@ const VERSION = JSON.parse(fs.readFileSync(path.join(C.CODE_DIR, 'package.json')
 const security = createLocalApiSecurity({ port: PORT });
 const pendingCaptures = new Map();
 const CAPTURE_TTL_MS = 2 * 60 * 1000;
+// 首页之外允许下发的静态文件:请求路径 → Content-Type。nosniff 之下类型必须精确。
+const STATIC_ASSETS = Object.freeze({
+  '/manager.css': 'text/css; charset=utf-8',
+  '/manager-ui.js': 'text/javascript; charset=utf-8',
+});
 
 // ---------- HTTP ----------
 function send(res, code, obj) {
@@ -198,6 +203,15 @@ const server = http.createServer(async (req, res) => {
       applySecurityHeaders(res);
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       return res.end(html);
+    }
+    // 页面的样式与脚本。白名单精确匹配,不做任何路径拼接,没有穿越面;
+    // 与首页同一道来源校验(同源子资源请求带 sec-fetch-site: same-origin,可过)。
+    // 会话密钥只注入进 HTML,这两个文件是纯静态内容,原样下发。
+    if (m === 'GET' && Object.hasOwn(STATIC_ASSETS, p)) {
+      security.assertPageRequest(req);
+      applySecurityHeaders(res);
+      res.writeHead(200, { 'Content-Type': STATIC_ASSETS[p] });
+      return res.end(fs.readFileSync(path.join(C.CODE_DIR, p.slice(1)), 'utf8'));
     }
     if (p.startsWith('/api/')) security.assertApiRequest(req);
     // 账号列表(含实时状态)
