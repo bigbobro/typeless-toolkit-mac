@@ -215,20 +215,30 @@ async function launch(){
     if(CONNECTION_STATE==='checking') setConnectionUi('error');
   }
 }
+// 首载用骨架屏占位;之后的刷新保留现有卡片、整体轻微变淡,不再整块闪成「加载中…」
+let ACCOUNTS_LOADED=false;
+const SKELETON_HTML=Array.from({length:3},()=>'<div class="skel"><i></i><i></i><i></i><i></i><i></i></div>').join('');
 async function loadAccounts(){
-  const g=document.getElementById('grid'); g.innerHTML='<div class="empty">加载中…</div>';
-  const r=await api('/api/accounts');
+  const g=document.getElementById('grid');
+  if(ACCOUNTS_LOADED) g.classList.add('refreshing'); else g.innerHTML=SKELETON_HTML;
+  let r;
+  try{ r=await api('/api/accounts'); }
+  finally{ g.classList.remove('refreshing'); }
   if(r.status!=='OK'){ g.innerHTML='<div class="empty">'+esc(r.msg)+'</div>'; return; }
-  ACCOUNTS=r.data||[];
+  ACCOUNTS=r.data||[]; ACCOUNTS_LOADED=true;
   render();
   loadBackupStatus();
 }
 function pct(v,l){ return l? Math.min(100, Math.round(v/l*100)):0; }
+// 卡片入场动画只在第一次画出卡片时播一遍(render 会被刷新 / 识别当前账号反复调用,每次都重放会很吵)
+let FIRST_PAINT=true;
 function render(){
   updateQuotaBanner();
   const g=document.getElementById('grid');
   if(!ACCOUNTS.length){ g.innerHTML='<div class="empty">还没有账号。点「添加当前账号」开始（先在 Typeless 登录该号）。</div>'; return; }
-  g.innerHTML=ACCOUNTS.map(a=>{
+  g.innerHTML=ACCOUNTS.map((a,i)=>{
+    const enterCls=FIRST_PAINT?' in':'';
+    const enterSty=FIRST_PAINT?` style="--i:${Math.min(i,8)}"`:'';
     const live=a.live||{};
     const u=live.usage||{};
     const ok=u.week_word_usage_value!=null; // liveStatus 失败时 usage 为空,显示 — 而非误导的 0
@@ -243,7 +253,7 @@ function render(){
       texp = `<div class="texp ${cls}" data-tip="token 过期日:${a.token_expires_at?esc(a.token_expires_at.slice(0,10)):''}">${txt}</div>`;
     }
     const snapTxt = a.has_snapshot ? ('快照已存'+(a.snapshot_mtime?' · '+relTime(a.snapshot_mtime):'')) : '未存快照';
-    return `<div class="card ${cur?'on':''}" data-account-id="${esc(a.user_id)}">
+    return `<div class="card ${cur?'on':''}${enterCls}"${enterSty} data-account-id="${esc(a.user_id)}">
       <div class="chead">
         <div class="cid">
           <div class="nrow"><span class="nick">${esc(a.nickname)}</span>${cur?'<span class="curmark">当前</span>':''}</div>
@@ -271,6 +281,7 @@ function render(){
       </div>
     </div>`;
   }).join('');
+  FIRST_PAINT=false;
 }
 function esc(s){ return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
