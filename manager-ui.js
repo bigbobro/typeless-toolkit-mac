@@ -1,14 +1,20 @@
 // Typeless 多账号管理器 —— 页面脚本。由 manager.html 以 <script src> 引入;
 // SESSION_SECRET 由 manager.html 里的内联脚本先行声明(同为经典脚本,顶层 const 跨脚本可见)。
 
-const api = (p, opt={}) => {
+const api = async (p, opt={}) => {
   const headers={
     'x-typeless-session':SESSION_SECRET,
     ...(opt.body!==undefined?{'Content-Type':'application/json'}:{}),
     ...(opt.headers||{}),
   };
-  return fetch(p,{...opt,headers}).then(r=>r.json());
+  try{ return await (await fetch(p,{...opt,headers})).json(); }
+  catch(e){
+    const msg='管理器连接断开，未能确认结果。请刷新后确认，再重试。';
+    if(opt.method && opt.method!=='GET') operationResult(msg,true);
+    return {status:'FAIL',code:'CONNECTION_ERROR',msg};
+  }
 };
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 let ACCOUNTS = [], CUR_ID = null, curDetail = null, curWords = [], dictFilter = 'all', dictError = null;
 let CONNECTION_STATE = 'checking', CONNECTION_BUSY = false, CURRENT_DETECTING = false;
 
@@ -58,6 +64,11 @@ function toast(m,kind){
   t.textContent=m; t.className='toast on'+(kind?' '+kind:'');
   _toastKind=kind||''; _toastUntil=now+TOAST_MS;
   _toastT=setTimeout(()=>{ t.className='toast'; _toastKind=''; },TOAST_MS);
+}
+function operationResult(message,failed=false){
+  const el=document.getElementById('operationResult');
+  document.getElementById('operationMsg').textContent=message;
+  el.className='banner'+(failed?' warn':''); el.style.display='flex';
 }
 function openModal(id){ document.getElementById(id).classList.add('on'); }
 function closeModal(id){ document.getElementById(id).classList.remove('on'); }
@@ -136,10 +147,13 @@ function renderBackupStatus(d){
   meta.textContent=[latest, changed].filter(Boolean).join(' · ');
 }
 async function loadBackupStatus(){
-  try{
-    const r=await api('/api/backup-status');
-    if(r.status==='OK') renderBackupStatus(r.data);
-  }catch(e){}
+  const r=await api('/api/backup-status');
+  if(r.status==='OK') renderBackupStatus(r.data);
+  else{
+    document.getElementById('backupBadge').textContent='状态未知';
+    document.getElementById('backupText').textContent=r.msg||'备份状态读取失败，请刷新重试';
+    document.getElementById('backupMeta').textContent='';
+  }
 }
 async function backupNow(){
   toast('备份中…');
@@ -147,6 +161,7 @@ async function backupNow(){
   if(r.status==='OK'){
     renderBackupStatus(r.data);
     toast(r.msg||'已备份','ok');
+    operationResult(r.msg||'已备份');
   }else{
     toast(r.msg||'备份失败','err');
   }
@@ -182,14 +197,14 @@ async function restoreBackupFile(input){
     const r=await api('/api/backup-restore',{method:'POST',body:file});
     if(r.status==='OK'){
       renderBackupStatus(r.data);
-      toast('备份已恢复','ok');
+      operationResult('备份已恢复。账号列表会重新检查登录状态；旧备份不能恢复已经失效的登录凭证。');
       await loadAccounts();
       detectCurrent();
     }else{
-      toast(r.msg||'恢复失败','err');
+      operationResult(r.msg||'恢复失败',true);
     }
   }catch(e){
-    toast('恢复失败:备份包格式不正确','err');
+    operationResult('恢复结果检查失败：'+e.message,true);
   }
 }
 
@@ -220,14 +235,21 @@ let ACCOUNTS_LOADED=false;
 const SKELETON_HTML=Array.from({length:3},()=>'<div class="skel"><i></i><i></i><i></i><i></i><i></i></div>').join('');
 async function loadAccounts(){
   const g=document.getElementById('grid');
+  loadBackupStatus();
   if(ACCOUNTS_LOADED) g.classList.add('refreshing'); else g.innerHTML=SKELETON_HTML;
-  let r;
-  try{ r=await api('/api/accounts'); }
-  finally{ g.classList.remove('refreshing'); }
-  if(r.status!=='OK'){ g.innerHTML='<div class="empty">'+esc(r.msg)+'</div>'; return; }
+  const r=await api('/api/accounts');
+  g.classList.remove('refreshing');
+  const error=document.getElementById('accountsError');
+  if(r.status!=='OK'){
+    if(!ACCOUNTS_LOADED) g.innerHTML='';
+    error.style.display='flex';
+    error.innerHTML='<span>账号列表未能刷新，已显示的信息可能不是最新。'+esc(r.msg||'读取失败')+'</span><button class="btn small" onclick="loadAccounts()">重试</button>';
+    return false;
+  }
+  error.style.display='none'; error.innerHTML='';
   ACCOUNTS=r.data||[]; ACCOUNTS_LOADED=true;
   render();
-  loadBackupStatus();
+  return true;
 }
 function pct(v,l){ return l? Math.min(100, Math.round(v/l*100)):0; }
 // 卡片入场动画只在第一次画出卡片时播一遍(render 会被刷新 / 识别当前账号反复调用,每次都重放会很吵)
@@ -244,26 +266,25 @@ function render(){
     const ok=u.week_word_usage_value!=null; // liveStatus 失败时 usage 为空,显示 — 而非误导的 0
     const used=ok?u.week_word_usage_value:0, lim=u.week_word_usage_limit||8000;
     const p=pct(used,lim); const over=ok&&used>lim;
-    const valid=live.token_valid!==false;
+    const expired=a.login_status==='expired';
     const cur=a.user_id===CUR_ID;
-    let texp='';
-    if(a.token_days_left!=null){
-      const cls = a.token_days_left<=0 ? 'bad' : (a.token_days_left<30 ? 'warn' : '');
-      const txt = a.token_days_left<=0 ? 'token 已过期' : `token 剩余 ${a.token_days_left} 天`;
-      texp = `<div class="texp ${cls}" data-tip="token 过期日:${a.token_expires_at?esc(a.token_expires_at.slice(0,10)):''}">${txt}</div>`;
-    }
+    const texp=expired?'':`<div class="texp ${a.login_status==='valid'?'':'warn'}">${a.login_status==='valid'?'登录凭证有效':'登录状态暂未确认，请刷新重试'}</div>`;
     const snapTxt = a.has_snapshot ? ('快照已存'+(a.snapshot_mtime?' · '+relTime(a.snapshot_mtime):'')) : '未存快照';
-    return `<div class="card ${cur?'on':''}${enterCls}"${enterSty} data-account-id="${esc(a.user_id)}">
+    return `<div class="card ${cur?'on':''} ${expired?'expired':''}${enterCls}"${enterSty} data-account-id="${esc(a.user_id)}">
       <div class="chead">
         <div class="cid">
           <div class="nrow"><span class="nick">${esc(a.nickname)}</span>${cur?'<span class="curmark">当前</span>':''}</div>
           <div class="email">${esc(a.email||'')}</div>
           ${texp}
         </div>
-        <span class="flag ${valid?'':'bad'}">${valid?esc(a.role||'未知'):'token失效'}</span>
+        <span class="flag ${expired?'bad':''}">${expired?'登录已失效':esc(a.role||'未知')}</span>
       </div>
       <div class="cbody">
-        <div class="qrow"><span>本周额度</span><b>${ok?used.toLocaleString():'—'} / ${lim.toLocaleString()}</b></div>
+        ${expired?`<p class="recovery-note">已保存的登录凭证无法继续使用。重新登录后更新原账号，或从列表移除。</p>
+        <div class="cfoot">
+          <button class="btn small danger" data-action="remove-account" data-account-id="${esc(a.user_id)}">移除</button>
+          <button class="cbtn" data-action="recover-account" data-account-id="${esc(a.user_id)}">重新登录</button>
+        </div>`:`<div class="qrow"><span>本周额度</span><b>${ok?used.toLocaleString():'—'} / ${lim.toLocaleString()}</b></div>
         <div class="qtrack ${over?'over':(p>80?'warn':'')}"><i style="width:${ok?(over?100:p):0}%"></i></div>
         <div class="qrow"><span>剩余字数</span><b>${ok?(lim-used).toLocaleString():'—'}</b></div>
         <div class="mini">
@@ -275,9 +296,9 @@ function render(){
           <span class="snap">${snapTxt}</span>
           ${a.has_snapshot
             ? `<button class="cbtn" data-action="switch-account" data-account-id="${esc(a.user_id)}" data-tr data-tip="还原该账号登录态快照并重启 Typeless，随后自动同步该账号词库">切换到此号</button>`
-            : `<span class="cbtn off" data-tr data-tip="该账号还没有快照，先在 Typeless 登录该号后点「更新快照」">切换到此号</span>`}
+            : `<button class="cbtn" data-action="recover-account" data-account-id="${esc(a.user_id)}" data-tr data-tip="登录快照不可用，请重新登录此账号并更新登录">更新登录</button>`}
         </div>
-        <div class="copen"><span>查看词库 / 用量 / 个性化</span><span class="arw">›</span></div>
+        <div class="copen"><span>查看词库 / 用量 / 个性化</span><span class="arw">›</span></div>`}
       </div>
     </div>`;
   }).join('');
@@ -286,10 +307,17 @@ function render(){
 function esc(s){ return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 document.getElementById('grid').addEventListener('click',e=>{
+  const action=e.target.closest('[data-action]');
+  if(action?.dataset.action==='recover-account'){ e.stopPropagation(); addAccount(action.dataset.accountId); return; }
+  if(action?.dataset.action==='remove-account'){ e.stopPropagation(); rmAccount(action.dataset.accountId); return; }
   const switchBtn=e.target.closest('[data-action="switch-account"]');
   if(switchBtn){ e.stopPropagation(); switchTo(switchBtn.dataset.accountId); return; }
   const card=e.target.closest('.card[data-account-id]');
-  if(card) openDetail(card.dataset.accountId);
+  if(card){
+    const id=card.dataset.accountId;
+    if(ACCOUNTS.find(a=>a.user_id===id)?.login_status==='expired') addAccount(id);
+    else openDetail(id);
+  }
 });
 
 // 词库接口失败必须显示成失败,不能显示成「空词库」。后端 assertApiOk 已经把 curl
@@ -419,6 +447,7 @@ async function syncOne(){
     if(r.status==='OK') toast(`同步完成:导出 ${r.data.exported} / 导入 ${r.data.imported} / 主库 ${r.data.master_count}`,'ok');
     else toast('失败: '+(r.msg||''),'err');
     await loadAccounts();
+    if(r.status==='OK'){ await loadWords(curDetail.user_id); renderDict(); }
   } finally { setBusy(false); }
 }
 function syncRowHtml(item){
@@ -430,28 +459,18 @@ async function syncAll(){
   setBusy(true);
   openModal('syncMask');
   const body=document.getElementById('syncBody');
-  body.innerHTML='<div class="diag-prog"><div class="diag-prog-bar"><i id="syncBar"></i></div>'
-    +'<div class="diag-prog-txt" id="syncTxt"><span class="spin" id="syncSpin"></span><span id="syncStep">同步中…</span><span class="cnt" id="syncCnt"></span></div></div>'
-    +'<div id="syncRows"></div>';
+  body.innerHTML='<div class="empty">同步中，正在等待各账号结果…</div>';
   try{
     const r=await api('/api/sync-all',{method:'POST'});
-    const list=r.status==='OK'?(r.data||[]):[];
-    const bar=document.getElementById('syncBar'), stepEl=document.getElementById('syncStep'),
-          cntEl=document.getElementById('syncCnt'), rowsEl=document.getElementById('syncRows'),
-          txtEl=document.getElementById('syncTxt'), spin=document.getElementById('syncSpin');
-    const N=list.length||1;
-    for(let i=0;i<list.length;i++){
-      stepEl.textContent='正在同步 '+(list[i].nickname||list[i].user_id)+'…';
-      cntEl.textContent=(i+1)+' / '+N;
-      rowsEl.insertAdjacentHTML('beforeend', syncRowHtml(list[i]));
-      bar.style.width=Math.round((i+1)/N*100)+'%';
-      await diagSleep(220);
-    }
-    spin.style.display='none'; txtEl.classList.add('done');
-    stepEl.textContent = list.length ? '✓ 全部同步完成' : '没有账号可同步';
-    cntEl.textContent=list.length+' / '+list.length;
-    toast(`完成 ${list.length} 个账号`, list.some(x=>x.error)?'err':'ok');
-    await loadAccounts();
+    if(r.status!=='OK') throw new Error(r.msg||'同步失败');
+    const list=r.data||[], failed=list.filter(x=>x.error).length;
+    const summary=list.length?`同步结果：${list.length-failed} 个成功，${failed} 个失败`:'没有账号可同步';
+    body.innerHTML='<p>'+summary+'</p><div id="syncRows">'+list.map(syncRowHtml).join('')+'</div>';
+    toast(summary, failed?'err':'ok');
+    await loadAccounts().catch(e=>toast('账号刷新失败: '+e.message,'err'));
+  } catch(e) {
+    body.innerHTML='<div class="empty">同步失败：'+esc(e.message)+'</div>';
+    toast('同步失败: '+e.message,'err');
   } finally { setBusy(false); }
 }
 // 切号 = 还原快照重启 Typeless + 紧接着同步该账号词库。
@@ -468,36 +487,39 @@ async function switchTo(id){
     const r=await api('/api/accounts/'+encodeURIComponent(id)+'/switch',{method:'POST'});
     if(r.status!=='OK'){
       toast(r.msg||'切换失败','err');
+      operationResult(r.msg||'切换失败',true);
+      if(r.code==='ACCOUNT_LOGIN_EXPIRED'){ a.login_status='expired'; render(); }
       await loadAccounts(); await detectCurrent();
       return;                       // 号没切成,不去同步一个并没有生效的账号
     }
     toast('已切换,正在同步词库…');
-    // 同步走该账号已存的 token,不依赖 Typeless 起没起来,
-    // 所以让它和「等 Typeless 重启完」的等待并行,不额外拖长切号耗时。
-    const [sync]=await Promise.all([
-      api('/api/accounts/'+encodeURIComponent(id)+'/sync',{method:'POST'})
-        .catch(e=>({status:'FAIL',msg:e.message||'网络错误'})),
-      diagSleep(6000),
-    ]);
+    const sync=await api('/api/accounts/'+encodeURIComponent(id)+'/sync',{method:'POST'})
+      .catch(e=>({status:'FAIL',msg:e.message||'网络错误'}));
     if(sync.status==='OK'){
       toast(`已切换 · 词库同步完成:导出 ${sync.data.exported} / 导入 ${sync.data.imported} / 主库 ${sync.data.master_count}`,'ok');
+      operationResult('已切换到「'+a.nickname+'」，词库同步完成。');
     }else{
       toast('已切换,但词库同步失败:'+(sync.msg||'未知原因'),'err');
+      operationResult('账号已切换，但词库同步未完成：'+(sync.msg||'未知原因')+'。可打开账号详情重试同步。',true);
     }
     await loadAccounts(); await detectCurrent();
+  } catch(e) {
+    toast('切换失败: '+e.message,'err');
   } finally { setBusy(false); }
 }
 async function resetDevice(){
   if(BUSY) return;
-  const ok=await confirmModal('解除设备限制?\n\n将重置设备 ID(删凭据+device.cache+user-data+清登录态),Typeless 重启到登录页,即可注册新账号。\n当前账号会被登出(若已存快照可随时切回)。',{danger:true,okText:'解除设备限制'});
+  const ok=await confirmModal('解除设备限制?\n\n将重置设备并重启 Typeless 到登录页。当前账号会被登出。\n只有保存了完整快照且登录凭证仍有效的账号才能切回，否则需要重新登录。',{danger:true,okText:'解除设备限制'});
   if(!ok) return;
   setBusy(true);
   try{
     toast('重置中…');
     const r=await api('/api/reset-device',{method:'POST'});
     toast(r.msg||'已重置', r.status==='OK'?'ok':'err');
+    operationResult(r.msg||(r.status==='OK'?'已重置':'重置失败'),r.status!=='OK');
+    if(r.status!=='OK') return;
     loadBackupStatus();
-    await diagSleep(7000);
+    await sleep(7000);
     await loadAccounts(); await detectCurrent();
   } finally { setBusy(false); }
 }
@@ -521,17 +543,23 @@ async function patchPaywall(){
       toast(r.data?.already?'已是补丁版,无需重打':'补丁完成,已重启 Typeless','ok');
     }else{
       toast(r.msg||'打补丁失败','err');
+      operationResult(r.msg||'打补丁失败',true);
+      return;
     }
     loadBackupStatus();
-    await diagSleep(7000);
+    await sleep(7000);
     detectCurrent();
   } finally { setBusy(false); }
 }
 async function importMaster(){
   if(!curDetail) return; toast('导入主词库中…');
   const r=await api('/api/accounts/'+encodeURIComponent(curDetail.user_id)+'/import-master',{method:'POST'});
-  if(r.status==='OK') toast(`主词库 ${r.data.master} 条,新导入 ${r.data.imported} 条`,'ok');
+  if(r.status==='OK'){
+    toast(`主词库 ${r.data.master} 条,新导入 ${r.data.imported} 条`,'ok');
+    operationResult('「'+curDetail.nickname+'」主词库导入完成，新导入 '+r.data.imported+' 条。');
+  }
   else toast('失败: '+(r.msg||''),'err');
+  if(r.status==='OK'){ await loadWords(curDetail.user_id); renderDict(); }
   await loadAccounts();
 }
 function copyFrom(){
@@ -551,51 +579,95 @@ async function confirmCopyFrom(){
   const r=await api('/api/accounts/'+encodeURIComponent(curDetail.user_id)+'/copy-from/'+encodeURIComponent(srcId),{method:'POST'});
   if(r.status==='OK') toast(`源 ${r.data.src_count} 条,新导入 ${r.data.imported} 条`,'ok');
   else toast('失败: '+(r.msg||''),'err');
+  if(r.status==='OK'){ await loadWords(curDetail.user_id); renderDict(); }
   await loadAccounts();
 }
-async function saveSnap(){
-  if(!curDetail) return;
-  const r=await api('/api/accounts/'+encodeURIComponent(curDetail.user_id)+'/snapshot',{method:'POST'});
-  toast(r.msg||'已保存', r.status==='OK'?'ok':'err'); await loadAccounts(); loadBackupStatus();
-}
-async function rmAccount(){
-  if(!curDetail) return;
-  const ok=await confirmModal('从管理器移除「'+curDetail.nickname+'」?(不影响 Typeless)',{danger:true,okText:'移除'});
+async function rmAccount(id=curDetail?.user_id){
+  if(BUSY) return;
+  const account=ACCOUNTS.find(a=>a.user_id===id); if(!account) return;
+  const ok=await confirmModal('从列表移除「'+account.nickname+'」？\n不会注销 Typeless 账号或删除云端词库。本地旧快照和备份保留，可重新登录后添加。',{danger:true,okText:'移除'});
   if(!ok) return;
-  api('/api/accounts/'+encodeURIComponent(curDetail.user_id),{method:'DELETE'}).then(r=>{
-    if(r.status!=='OK'){ toast(r.msg||'移除失败','err'); return; }
-    closeModal('detailMask');loadAccounts();loadBackupStatus();toast('已移除','ok');
-  });
+  try{
+    const r=await api('/api/accounts/'+encodeURIComponent(id),{method:'DELETE'});
+    if(r.status!=='OK') throw new Error(r.msg||'移除失败');
+    closeModal('detailMask');
+    ACCOUNTS=ACCOUNTS.filter(a=>a.user_id!==id); render(); loadBackupStatus();
+    const add=await confirmModal('「'+account.nickname+'」已从列表移除。重新登录后，可以通过「添加当前账号」再次加入。',{title:'已移除',okText:'重新添加',cancelText:'完成'});
+    if(add) addAccount();
+  }catch(e){ toast('移除失败: '+e.message,'err'); }
 }
 
-function addAccount(){ openModal('addMask'); document.getElementById('addStep1').style.display='block'; document.getElementById('addStep2').style.display='none'; }
+let ADD_TARGET_ID=null;
+function addAccount(id=null){
+  if(BUSY) return;
+  const account=ACCOUNTS.find(a=>a.user_id===id);
+  ADD_TARGET_ID=account?.user_id||null; window._cap=null;
+  closeModal('detailMask');
+  openModal('addMask');
+  document.getElementById('addTitle').textContent=account?'重新登录账号':'添加账号';
+  document.getElementById('addIntro').textContent=account
+    ? '先在 Typeless 登录「'+(account.email||account.nickname)+'」（若登录着其他账号，请先退出）。完成后回来读取并保存，将更新原账号的登录凭证和快照，不会新增重复卡片。'
+    : '先在 Typeless 登录要添加的账号，然后回来读取并保存。同一账号已在列表中时会更新原记录，不会重复添加。';
+  document.getElementById('addRegEntry').style.display=account?'none':'block';
+  document.getElementById('addError').textContent='';
+  document.getElementById('addStep1').style.display='block';
+  document.getElementById('addStep2').style.display='none';
+}
 async function doCapture(){
-  const btn=document.getElementById('capBtn'); btn.disabled=true; btn.textContent='抓取中…(主窗口将重载)';
-  const r=await api('/api/capture',{method:'POST'});
-  btn.disabled=false; btn.textContent='抓取当前账号';
-  if(r.status!=='OK'){ toast('抓取失败: '+(r.msg||''),'err'); return; }
-  const d=r.data; window._cap=d;
-  document.getElementById('addStep1').style.display='none';
-  document.getElementById('addStep2').style.display='block';
-  document.getElementById('addNick').value=d.nickname||d.email||'';
-  document.getElementById('addEmail').value=d.email||'';
-  document.getElementById('addMeta').value=(d.role||'')+' · '+d.user_id;
-  const exist=ACCOUNTS.find(x=>x.user_id===d.user_id);
-  document.getElementById('addExist').textContent=exist?'该账号已存在,保存将更新 token':'';
+  const btn=document.getElementById('capBtn'); btn.disabled=true; btn.textContent='正在读取…';
+  document.getElementById('addError').textContent='';
+  try{
+    const current=await api('/api/current');
+    if(current.status!=='OK') throw new Error(current.code==='MANAGEMENT_CONNECTION_REQUIRED'?'请先连接 Typeless，再登录账号。':current.code==='CURRENT_ACCOUNT_UNAVAILABLE'?'尚未检测到登录，请先在 Typeless 完成登录。':current.msg||'登录状态读取失败，请重试。');
+    if(ADD_TARGET_ID && current.data.user_id!==ADD_TARGET_ID) throw new Error('当前登录的不是要更新的账号，请在 Typeless 登录原账号后重试。');
+    const r=await api('/api/capture',{method:'POST'});
+    if(r.status!=='OK') throw new Error(r.msg||'读取失败');
+    const d=r.data;
+    if(ADD_TARGET_ID && d.user_id!==ADD_TARGET_ID) throw new Error('当前登录的不是要更新的账号，请重新登录原账号。');
+    window._cap=d;
+    document.getElementById('addStep1').style.display='none';
+    document.getElementById('addStep2').style.display='block';
+    const exist=ACCOUNTS.find(x=>x.user_id===d.user_id);
+    document.getElementById('addNick').value=exist?.nickname||d.nickname||d.email||'';
+    document.getElementById('addEmail').value=d.email||'';
+    document.getElementById('addMeta').value=d.role||'未知';
+    document.getElementById('addSaveBtn').textContent=exist?'更新原账号':'添加账号';
+    document.getElementById('addExist').textContent=exist?'保存将更新原账号的登录凭证和快照，不会重复添加。':'';
+  }catch(e){ document.getElementById('addError').textContent=e.message; }
+  finally{ btn.disabled=false; btn.textContent='我已登录，读取当前账号'; }
 }
 async function saveAccount(){
   const d=window._cap; if(!d) return;
+  const existing=ACCOUNTS.some(a=>a.user_id===d.user_id);
+  const btn=document.getElementById('addSaveBtn'); btn.disabled=true;
+  try{
   const r=await api('/api/accounts',{method:'POST',body:JSON.stringify({
     capture_id:d.capture_id,
+    expected_user_id:ADD_TARGET_ID||undefined,
     nickname:document.getElementById('addNick').value.trim(),
     email:document.getElementById('addEmail').value.trim()||d.email,
   })});
-  if(r.status!=='OK'){ toast('保存失败: '+(r.msg||'未知原因'),'err'); return; }
-  closeModal('addMask'); toast('已保存,正在迁移主词库到此号…');
+  if(r.status!=='OK'){
+    if(['CAPTURE_EXPIRED','CURRENT_ACCOUNT_CHANGED','ACCOUNT_MISMATCH','ACCOUNT_LOGIN_EXPIRED'].includes(r.code)) addAccount(ADD_TARGET_ID);
+    throw new Error(r.msg||'保存失败');
+  }
+  const saved={...d,...r.data,has_snapshot:true,login_status:'unknown'};
+  delete saved.capture_id;
+  ACCOUNTS=ACCOUNTS.filter(a=>a.user_id!==d.user_id).concat(saved); ACCOUNTS_LOADED=true; render();
+  closeModal('addMask'); window._cap=null;
+  toast(existing?'原账号登录已更新':'账号已添加','ok');
+  let result=existing?'原账号登录已更新。':'账号已添加。';
+  let importFailed=false;
   // 自动迁移:把主词库导入新账号
+  if(!existing){
   const m=await api('/api/accounts/'+encodeURIComponent(d.user_id)+'/import-master',{method:'POST'});
-  if(m.status==='OK') toast('添加完成,已导入 '+m.data.imported+' 个词','ok');
-  await loadAccounts(); loadBackupStatus();
+  if(m.status==='OK') result+='已导入 '+m.data.imported+' 个词。';
+  else{ importFailed=true; result+='词库导入未完成：'+(m.msg||'请稍后重试')+'。可打开账号详情，点「从主词库导入」重试。'; }
+  }
+  await loadAccounts(); await detectCurrent(true);
+  operationResult(result,importFailed);
+  }catch(e){ document.getElementById('addError').textContent=e.message; toast(e.message,'err'); }
+  finally{ btn.disabled=false; }
 }
 
 // ===== 注册新账号引导:轮询 /api/current 驱动三步状态 =====
@@ -652,7 +724,7 @@ async function regPoll(){
       if(r.data?.state==='connected') regRender(2);
       else regRender(1,{disconnected:true});
     }
-  }catch(e){ /* 单次探测失败:保持当前显示,下一轮再试 */ }
+  }catch(e){ REG_DETECTED=null; regRender(1,{disconnected:true}); }
   finally{ REG_POLLING=false; }
 }
 function regCapture(){
@@ -694,104 +766,61 @@ async function saveMaster(){
 }
 
 function openDiag(){ openModal('diagMask'); renderDiag(); }
-const diagSleep=ms=>new Promise(r=>setTimeout(r,ms));
-function diagRow(dot,k,v,vcls){ return `<div class="diag-row in"><span class="ddot ${dot}"></span><span class="dk">${k}</span><span class="dv ${vcls||''}">${v}</span></div>`; }
+function diagRow(dot,k,v,vcls){ return `<div class="diag-row"><span class="ddot ${dot}"></span><span class="dk">${k}</span><span class="dv ${vcls||''}">${v}</span></div>`; }
 function paywallRowHtml(pw){
   const reverted = pw.exists && pw.has_backup && !pw.patched;
   let dot='neutral', txt='未打补丁', cls='mut';
   if(pw.error){ dot='warn'; txt=esc(pw.error); cls='warn'; }
   else if(reverted){ dot='warn'; txt='<span class="warn">已被 Typeless 更新还原，需重打</span>'; cls=''; }
   else if(pw.patched){ dot='ok'; txt='<b>已打补丁</b>'; cls=''; }
-  return `<div class="diag-row in"><span class="ddot ${dot}"></span><span class="dk">去弹窗补丁</span><span class="dv ${cls}">${txt}</span></div>`;
+  return diagRow(dot,'去弹窗补丁',txt,cls);
 }
 let diagRunning=false;
 async function renderDiag(){
   if(diagRunning) return;            // 防重复触发
   diagRunning=true;
-  const STEP_MS=380;
   const el=document.getElementById('diagBody');
-  el.innerHTML='<div class="diag-prog"><div class="diag-prog-bar"><i id="diagBar"></i></div>'
-    +'<div class="diag-prog-txt" id="diagTxt"><span class="spin" id="diagSpin"></span><span id="diagStep">开始体检…</span><span class="cnt" id="diagCnt"></span></div></div>'
-    +'<div id="diagRows"></div>';
-  const bar=document.getElementById('diagBar'), stepEl=document.getElementById('diagStep'),
-        cntEl=document.getElementById('diagCnt'), rowsEl=document.getElementById('diagRows'),
-        txtEl=document.getElementById('diagTxt'), spin=document.getElementById('diagSpin');
-  const r=await api('/api/diagnostics');
-  if(r.status!=='OK'){ el.innerHTML='<div class="empty">'+esc(r.msg||'检查失败')+'</div>'; diagRunning=false; return; }
-  const d=r.data, t=d.typeless;
-  const cur=(CUR_ID && ACCOUNTS.length)?ACCOUNTS.find(x=>x.user_id===CUR_ID):null;
-  const bk=d.data.backup||{};
-  const steps=[
-    {label:'检查 Typeless 应用', row:()=>diagRow(t.app_found?'ok':'bad','Typeless 应用', t.app_found?`<b>已找到</b> ${esc(t.app_path)}`:'未找到 — 请确认已安装 Typeless', t.app_found?'mut':'bad')},
-    {label:'检查 app.asar', row:()=>diagRow(t.asar_found?'ok':'bad','app.asar', t.asar_found?'已找到':'未找到（去弹窗补丁不可用）', t.asar_found?'mut':'bad')},
-    {label:'检查用户数据目录', row:()=>diagRow(t.user_data_found?'ok':'warn','用户数据目录', t.user_data_found?esc(t.user_data_dir):'未找到', t.user_data_found?'mut':'warn')},
-    {label:'连接管理端口 '+d.cdp.port, row:()=>diagRow(d.cdp.reachable?'ok':'warn','管理端口 '+d.cdp.port, d.cdp.reachable?'<b>已连接</b>':'未开启 — 点「⏻ 连接 Typeless」', d.cdp.reachable?'':'warn')},
-    {label:'确认当前登录账号', row:()=>diagRow(cur?'ok':'neutral','当前登录', cur?`<b>${esc(cur.nickname||cur.email||CUR_ID)}</b>`:(d.cdp.reachable?'管理连接已建立，尚未识别账号':'未检测（管理连接未开启）'), cur?'':'mut')},
-    {label:'读取 app.asar，检查去弹窗补丁（较慢，请稍候）', slow:true, row:async()=>{ let pw={}; try{ const pr=await api('/api/paywall-status'); pw=pr.data||{}; }catch(e){ pw={error:'检查失败'}; } return paywallRowHtml(pw); }},
-    {label:'确认代码目录', row:()=>diagRow('neutral','代码目录', esc(d.data.code_dir||''), 'mut')},
-    {label:'检查稳定数据目录', row:()=>diagRow(d.data.writable?'ok':'bad','数据目录', `${esc(d.data.dir)}${d.data.writable?'':' <span class="bad">（不可写！）</span>'}`, d.data.writable?'mut':'')},
-    {label:'检查旧数据迁移', row:()=>diagRow('ok','数据迁移', esc(d.data.migration?.status||'ready'), 'mut')},
-    {label:'统计已收录账号', row:()=>diagRow('neutral','已收录账号', `<b>${d.data.accounts_count}</b> 个`, '')},
-    {label:'检查运行数据备份', row:()=>diagRow(bk.backed_up?'ok':'warn','运行数据备份', bk.backed_up?'已备份':'有变更，建议「立即备份」', bk.backed_up?'mut':'warn')},
-  ];
-  const N=steps.length;
-  for(let i=0;i<N;i++){
-    stepEl.textContent='正在'+steps[i].label+'…';
-    cntEl.textContent=(i+1)+' / '+N;
-    await diagSleep(steps[i].slow?120:STEP_MS);   // 先亮出“正在做什么”，再出结果
-    const html=await steps[i].row();
-    rowsEl.insertAdjacentHTML('beforeend', html);
-    bar.style.width=Math.round((i+1)/N*100)+'%';
-    if(!steps[i].slow) await diagSleep(90);
-  }
-  spin.style.display='none';
-  txtEl.classList.add('done');
-  stepEl.textContent='✓ 体检完成';
-  cntEl.textContent=N+' / '+N;
-  diagRunning=false;
-}
-// 开机自动检测:统一进度条,一步一步走,让用户看清正在做什么
-let _hstatT;
-// 右上浮层:只显示“一次性反馈”(开机进度 / 已收录登录确认);绝对定位,淡入淡出,不占文档流、不推挤下方
-function hstatShow(html, fadeMs){
-  const f=document.getElementById('hstat');
-  clearTimeout(_hstatT);
-  f.innerHTML=html; f.className='hstat on';
-  if(fadeMs) _hstatT=setTimeout(()=>{ f.className='hstat'; }, fadeMs);
+  el.innerHTML='<div class="empty">检查中…</div>';
+  try{
+    const r=await api('/api/diagnostics');
+    if(r.status!=='OK') throw new Error(r.msg||'检查失败');
+    const d=r.data, t=d.typeless;
+    const cur=ACCOUNTS.find(x=>x.user_id===CUR_ID);
+    const bk=d.data.backup||{};
+    el.innerHTML=[
+      diagRow(t.app_found?'ok':'bad','Typeless 应用', t.app_found?`<b>已找到</b> ${esc(t.app_path)}`:'未找到 — 请确认已安装 Typeless', t.app_found?'mut':'bad'),
+      diagRow(t.asar_found?'ok':'bad','app.asar', t.asar_found?'已找到':'未找到（去弹窗补丁不可用）', t.asar_found?'mut':'bad'),
+      diagRow(t.user_data_found?'ok':'warn','用户数据目录', t.user_data_found?esc(t.user_data_dir):'未找到', t.user_data_found?'mut':'warn'),
+      diagRow(d.cdp.reachable?'ok':'warn','管理端口 '+d.cdp.port, d.cdp.reachable?'<b>已连接</b>':'未开启 — 点「⏻ 连接 Typeless」', d.cdp.reachable?'':'warn'),
+      diagRow(cur?'ok':'neutral','当前登录', cur?`<b>${esc(cur.nickname||cur.email||CUR_ID)}</b>`:(d.cdp.reachable?'管理连接已建立，尚未识别账号':'未检测（管理连接未开启）'), cur?'':'mut'),
+      diagRow('neutral','代码目录', esc(d.data.code_dir||''), 'mut'),
+      diagRow(d.data.writable?'ok':'bad','数据目录', `${esc(d.data.dir)}${d.data.writable?'':' <span class="bad">（不可写！）</span>'}`, d.data.writable?'mut':''),
+      diagRow('ok','数据迁移', esc(d.data.migration?.status||'ready'), 'mut'),
+      diagRow('neutral','已收录账号', `<b>${d.data.accounts_count}</b> 个`, ''),
+      diagRow(bk.backed_up?'ok':'warn','运行数据备份', bk.backed_up?'已备份':'有变更，建议「立即备份」', bk.backed_up?'mut':'warn'),
+      '<div id="diagPaywall">'+diagRow('neutral','去弹窗补丁','正在读取 app.asar…','mut')+'</div>',
+    ].join('');
+    let pw;
+    try{
+      const pr=await api('/api/paywall-status');
+      if(pr.status!=='OK') throw new Error(pr.msg||'补丁检查失败');
+      pw=pr.data||{};
+    }catch(e){ pw={error:e.message}; }
+    document.getElementById('diagPaywall').innerHTML=paywallRowHtml(pw);
+  }catch(e){
+    el.innerHTML='<div class="empty">检查失败：'+esc(e.message)+'</div>';
+  }finally{ diagRunning=false; }
 }
 async function bootDetect(){
-  const f=document.getElementById('hstat');
-  clearTimeout(_hstatT);
-  f.innerHTML='<div class="boot-txt"><span class="spin"></span><span class="boot-step" id="bootStep">开始检测…</span><span class="cnt" id="bootCnt">0 / 4</span></div>'
-    +'<div class="boot-bar"><i id="bootBar"></i></div>';
-  f.className='hstat on';
-  const bar=()=>document.getElementById('bootBar'), stepEl=()=>document.getElementById('bootStep'), cntEl=()=>document.getElementById('bootCnt');
-  let pw=null;
-  const steps=[
-    {label:'加载账号列表与用量', run:loadAccounts},
-    {label:'检测 Typeless 管理连接与当前账号', run:()=>detectCurrent(true)},   // 开机内:静默更新状态,浮层归开机进度独占
-    {label:'自检去弹窗补丁（读取 app.asar，较慢）', run:async()=>{ try{ const r=await api('/api/paywall-status'); pw=r.data||{}; }catch(e){ pw={error:1}; } }},
-  ];
-  const N=steps.length, TOTAL=N+1;   // 3 项检查 + 第 4 步“全部填满 = 检查完成”
-  for(let i=0;i<N;i++){
-    const se=stepEl(), ce=cntEl();
-    if(se) se.textContent='正在'+steps[i].label+'…';
-    if(ce) ce.textContent=(i+1)+' / '+TOTAL;
-    try{ await Promise.all([ steps[i].run(), diagSleep(320) ]); }catch(e){}
-    const be=bar(); if(be) be.style.width=Math.round((i+1)/TOTAL*100)+'%';   // 25 → 50 → 75
-  }
-  const reverted = pw && pw.exists && pw.has_backup && !pw.patched;
-  if(reverted){
-    // 补丁被 Typeless 更新还原:进度浮层直接淡出,不再闪「✓ 检查完成」;告警条常驻,留在文档流占位显眼
-    clearTimeout(_hstatT); f.className='hstat';
+  try{ await loadAccounts(); }catch(e){ toast('账号加载失败: '+e.message,'err'); }
+  await detectCurrent(true);
+  try{
+    const r=await api('/api/paywall-status'), pw=r.data;
+    if(r.status!=='OK' || !pw?.exists || !pw.has_backup || pw.patched) return;
     const b=document.getElementById('patchBanner');
     b.className='banner warn'; b.style.display='flex';
     b.innerHTML='<span>⚠ 去弹窗补丁已被 Typeless 更新还原 — 点「⊘ 解除弹窗提示」可重打</span><span class="x" data-tip="忽略" onclick="this.parentElement.style.display=\'none\'">✕</span>';
-  }else{
-    // 完成:填满 → ✓ → 2.2s 后淡出(绝对定位,淡出不回流)
-    hstatShow('<div class="boot-txt"><span class="boot-step">✓ 检查完成</span><span class="cnt">'+TOTAL+' / '+TOTAL+'</span></div>'
-      +'<div class="boot-bar"><i style="width:100%"></i></div>', 2200);
-  }
+  }catch(e){}
 }
 async function detectCurrent(fromBoot){
   if(CURRENT_DETECTING) return {state:CONNECTION_STATE,account_detected:Boolean(CUR_ID)};
@@ -801,6 +830,7 @@ async function detectCurrent(fromBoot){
     const r=await api('/api/current');
     const b=document.getElementById('banner');
     if(r.status!=='OK'){
+      if(r.code==='CONNECTION_ERROR') throw new Error(r.msg);
       CUR_ID=null;
       b.style.display='none'; b.textContent='';
       const state=r.data?.state==='connected'?'connected':'disconnected';
@@ -816,12 +846,8 @@ async function detectCurrent(fromBoot){
     const label=matched?.nickname||d.nickname||d.email||d.user_id;
     setConnectionUi('connected',label);
     if(matched){
-      // 已收录:卡片高亮 + 顶部胶囊已表明当前账号。收起未收录横幅;非开机场景在右上浮层做一次淡出确认(nickname==email 不重复括号)
+      // 已收录:卡片高亮 + 顶部胶囊已表明当前账号。
       b.style.display='none';
-      if(!fromBoot){
-        const fullLabel=matched.nickname===matched.email?matched.nickname:matched.nickname+' ('+matched.email+')';
-        hstatShow('<div class="boot-txt"><span class="boot-step">✓ 当前 Typeless 登录: '+esc(fullLabel)+'</span></div>', 2600);
-      }
     }else{
       // 未收录:横幅是唯一能说清并引导「添加当前账号」的地方,常驻(留在文档流占位显眼)
       b.textContent='当前 Typeless 登录: '+(d.email||d.user_id)+'  — 未收录,点「添加当前账号」加入';

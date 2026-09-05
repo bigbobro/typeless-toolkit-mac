@@ -22,7 +22,8 @@ const {
   config, CDP_PORT, ASAR_PATH, MAC_INFO_PLIST,
   readAccounts, writeAccounts,
   backupRuntimeData, runtimeDataStatus, createRuntimeBackupBundle, restoreRuntimeBackupBundle,
-  saveSnapshot, restoreSnapshot, hasSnapshot, snapshotMtime, tokenExpiryInfo,
+  saveAccountWithSnapshot, restoreSnapshot, hasSnapshot, snapshotMtime, tokenExpiryInfo,
+  readLoginFiles, restoreLoginFiles, backupCurrentLogin,
   killTypeless, launchTypeless, resetDevice,
   readMaster, writeMaster,
   curlApi, assertApiOk, typelessConnectionStatus, ensureApp, captureTokenCDP,
@@ -32,7 +33,7 @@ const {
   accountMetaFromUserInfo,
   termKey, safeCount, assertSafeAccountId,
   DICT_LIST_PATH, listDictionary, dictDiff, importMissingTerms,
-  readCurrentLogin,
+  readCurrentLogin, verifyCurrentLogin,
   log, sleep,
 } = C;
 
@@ -42,6 +43,7 @@ const VERSION = JSON.parse(fs.readFileSync(path.join(C.CODE_DIR, 'package.json')
 const security = createLocalApiSecurity({ port: PORT });
 const pendingCaptures = new Map();
 const CAPTURE_TTL_MS = 2 * 60 * 1000;
+let mutationBusy = false;
 // 首页之外允许下发的静态文件:请求路径 → Content-Type。nosniff 之下类型必须精确。
 const STATIC_ASSETS = Object.freeze({
   '/manager.css': 'text/css; charset=utf-8',
@@ -98,11 +100,19 @@ function publicAccount(account, extra = {}) {
     added_at: account.added_at || null,
   };
   for (const key of [
-    'live', 'has_snapshot', 'snapshot_mtime', 'token_expires_at', 'token_days_left',
+    'live', 'has_snapshot', 'snapshot_mtime', 'token_expires_at', 'token_days_left', 'login_status',
   ]) {
     if (Object.hasOwn(extra, key)) view[key] = extra[key];
   }
   return view;
+}
+
+async function checkAccountLogin(account) {
+  try {
+    const result = await curlApi('POST', '/oauth/refresh_access_token', account.token, { app: 'typeless_webapp' });
+    if (result?.code === 402) return 'expired';
+    return typeof result?.access_token === 'string' && result.access_token ? 'valid' : 'unknown';
+  } catch (_) { return 'unknown'; }
 }
 
 function publicLiveStatus(live = {}) {
@@ -184,6 +194,7 @@ function takePendingCapture(id, consume = false) {
 }
 
 const server = http.createServer(async (req, res) => {
+  let ownsMutation = false;
   try {
     let u;
     try { u = new URL(req.url, `http://localhost:${PORT}`); }
@@ -199,7 +210,8 @@ const server = http.createServer(async (req, res) => {
     // 前端首页
     if (m === 'GET' && (p === '/' || p === '/index.html' || p === '/manager.html')) {
       security.assertPageRequest(req);
-      const html = security.injectHtml(fs.readFileSync(path.join(C.CODE_DIR, 'manager.html'), 'utf8'));
+      const html = security.injectHtml(fs.readFileSync(path.join(C.CODE_DIR, 'manager.html'), 'utf8')
+        .replace('__TYPELESS_MANAGER_VERSION__', VERSION));
       applySecurityHeaders(res);
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       return res.end(html);
@@ -214,19 +226,27 @@ const server = http.createServer(async (req, res) => {
       return res.end(fs.readFileSync(path.join(C.CODE_DIR, p.slice(1)), 'utf8'));
     }
     if (p.startsWith('/api/')) security.assertApiRequest(req);
+    if (p.startsWith('/api/') && (m !== 'GET' || p === '/api/backup-export')) {
+      if (mutationBusy) throw new LocalApiError(409, 'OPERATION_BUSY', '正在处理其他操作，请完成后重试');
+      mutationBusy = true; ownsMutation = true;
+    }
     // 账号列表(含实时状态)
     if (m === 'GET' && p === '/api/accounts') {
       const accs = readAccounts();
-      const live = await Promise.all(accs.map(a => liveStatus(a).catch(e => ({ token_valid: false, _err: e.message }))));
-      const data = accs.map((a, i) => {
+      const data = await Promise.all(accs.map(async a => {
+        const [live, loginStatus] = await Promise.all([
+          liveStatus(a).catch(e => ({ token_valid: false, _err: e.message })),
+          checkAccountLogin(a),
+        ]);
         const has = hasSnapshot(a.user_id);   // 每个账号只探一次,下面复用
         return publicAccount(a, {
-          live: publicLiveStatus(live[i]),
+          live: publicLiveStatus(live),
+          login_status: loginStatus,
           has_snapshot: has,
           snapshot_mtime: has ? snapshotMtime(a.user_id) : null,
           ...tokenExpiryInfo(a.token),
         });
-      });
+      }));
       return send(res, 200, { status: 'OK', data });
     }
     // 本地运行数据备份状态(accounts/profile/主词库)
@@ -299,6 +319,19 @@ const server = http.createServer(async (req, res) => {
       if (!b.capture_id) return send(res, 400, { status: 'FAIL', msg: '账号抓取结果缺失,请重新抓取' });
       const captured = takePendingCapture(b.capture_id);
       assertSafeAccountId(captured.user_id);
+      if (b.expected_user_id && b.expected_user_id !== captured.user_id) {
+        throw new LocalApiError(400, 'ACCOUNT_MISMATCH', '当前登录的不是要更新的账号,请登录原账号后重试');
+      }
+      if (readCurrentLogin()?.user_id !== captured.user_id) {
+        throw new LocalApiError(400, 'CURRENT_ACCOUNT_CHANGED', '当前登录账号已变化,请重新读取后保存');
+      }
+      const loginStatus = await checkAccountLogin(captured);
+      if (loginStatus === 'expired') {
+        throw new LocalApiError(400, 'ACCOUNT_LOGIN_EXPIRED', '读取到的登录凭证仍已失效，请在 Typeless 退出并重新登录，再回来读取。原记录未修改。');
+      }
+      if (loginStatus !== 'valid') {
+        throw new LocalApiError(502, 'LOGIN_CHECK_FAILED', '暂时无法确认登录凭证是否有效，请检查网络后重试。原记录未修改。');
+      }
       let meta = accountMetaFromUserInfo(captured.user_info, captured.user_id);
       if ((!captured.email || !captured.nickname || !captured.role) && captured.token) {
         try {
@@ -306,7 +339,7 @@ const server = http.createServer(async (req, res) => {
           meta = accountMetaFromUserInfo(ui.data || captured.user_info, captured.user_id);
         } catch (e) {}
       }
-      const accs = readAccounts();
+      const accs = readAccounts().slice();
       const idx = accs.findIndex(x => x.user_id === captured.user_id);
       const nickname = boundedText(b.nickname, 120, '昵称');
       const email = boundedText(b.email, 254, '邮箱');
@@ -319,31 +352,52 @@ const server = http.createServer(async (req, res) => {
         added_at: idx >= 0 ? accs[idx].added_at : new Date().toISOString(),
       };
       if (idx >= 0) accs[idx] = rec; else accs.push(rec);
-      writeAccounts(accs);
-      saveSnapshot(captured.user_id); // 保存登录态快照,供切换账号用
+      saveAccountWithSnapshot(accs, captured.user_id);
       takePendingCapture(b.capture_id, true);
       return send(res, 200, { status: 'OK', data: publicAccount(rec) });
-    }
-    // 手动更新当前账号快照(当前 Typeless 登录态 -> 该账号)
-    if (m === 'POST' && p.startsWith('/api/accounts/') && p.endsWith('/snapshot')) {
-      const id = pathAccountId(p);
-      saveSnapshot(id);
-      return send(res, 200, { status: 'OK', msg: '快照已保存', has_snapshot: hasSnapshot(id) });
     }
     // 切换到此账号(还原快照 + 重启 Typeless)
     if (m === 'POST' && p.startsWith('/api/accounts/') && p.endsWith('/switch')) {
       const id = pathAccountId(p);
-      if (!hasSnapshot(id)) return send(res, 400, { status: 'FAIL', msg: '该账号无快照,请先在 Typeless 登录该号后点「更新快照」' });
+      const account = requireAccount(id);
+      if (!hasSnapshot(id)) return send(res, 400, { status: 'FAIL', code: 'SNAPSHOT_INVALID', msg: '登录快照缺失或账号不匹配，请先在 Typeless 登录该号后点「更新登录」' });
+      const loginStatus = await checkAccountLogin(account);
+      if (loginStatus === 'expired') {
+        return send(res, 400, { status: 'FAIL', code: 'ACCOUNT_LOGIN_EXPIRED', msg: '该账号登录凭证已失效,本次未切换。请点卡片上的「重新登录」更新原账号,或选择「移除」。' });
+      }
+      if (loginStatus !== 'valid') {
+        return send(res, 502, { status: 'FAIL', code: 'LOGIN_CHECK_FAILED', msg: '无法验证该账号的登录凭证,请检查网络后重试。本次未切换。' });
+      }
       await killTypeless(); await sleep(1500);
-      restoreSnapshot(id);
-      launchTypeless();
+      const previousId = readCurrentLogin()?.user_id;
+      let recoveryDir, keepRecovery = false;
+      try { recoveryDir = backupCurrentLogin(); }
+      catch (e) { launchTypeless(); throw e; }
+      try {
+        restoreSnapshot(id);
+        launchTypeless();
+        await verifyCurrentLogin(id);
+      } catch (e) {
+        try {
+          await killTypeless();
+          restoreLoginFiles(readLoginFiles(recoveryDir));
+          launchTypeless();
+          if (previousId) await verifyCurrentLogin(previousId);
+        } catch (rollback) {
+          keepRecovery = true;
+          throw new LocalApiError(500, 'SWITCH_RECOVERY_REQUIRED', '切换失败，原登录态也未能确认恢复。请在 Typeless 重新登录，再通过「添加当前账号」更新原记录。切换前备份保留在 '+recoveryDir+'。'+rollback.message);
+        }
+        throw new LocalApiError(500, 'SWITCH_ROLLED_BACK', '切换失败，已恢复切换前的登录状态。请更新目标账号的登录后重试。'+e.message);
+      } finally {
+        if (!keepRecovery) fs.rmSync(recoveryDir, { recursive: true, force: true });
+      }
       return send(res, 200, { status: 'OK', msg: '已切换并重启 Typeless' });
     }
     // 解除设备限制(重置设备 ID,准备注册新账号)
     if (m === 'POST' && p === '/api/reset-device') {
       const dataBackup = backupRuntimeData('reset-device');
       await resetDevice();
-      return send(res, 200, { status: 'OK', msg: '设备已重置,Typeless 已以新设备 ID 启动(登录页),可注册新账号', manager_data_backup: dataBackup });
+      return send(res, 200, { status: 'OK', msg: '本地设备信息已清理，Typeless 已启动。请在应用中重新注册或登录。', manager_data_backup: dataBackup });
     }
     // 查询去弹窗补丁状态(只读)
     if (m === 'GET' && p === '/api/paywall-status') {
@@ -454,9 +508,21 @@ const server = http.createServer(async (req, res) => {
     if (m === 'POST' && p === '/api/sync-all') {
       const accs = readAccounts();
       const results = [];
+      const words = new Map();
+      // 先汇总所有可读账号，再向每个账号补齐同一份并集。
+      // 边读边同步会让排在前面的账号漏掉后面账号的新词。
       for (const a of accs) {
-        try { results.push({ user_id: a.user_id, nickname: a.nickname, ...(await syncAccount(a)) }); }
+        try { words.set(a.user_id, ((await listDictionary(a.token)).words || []).map(w => w.term).filter(Boolean)); }
         catch (e) { results.push({ user_id: a.user_id, nickname: a.nickname, error: e.message }); }
+      }
+      const master = words.size ? writeMaster([...readMaster(), ...[...words.values()].flat()]) : readMaster();
+      for (const a of accs) {
+        if (!words.has(a.user_id)) continue;
+        try {
+          const have = words.get(a.user_id);
+          const imported = await importMissingTerms(a.token, dictDiff(master, have));
+          results.push({ user_id: a.user_id, nickname: a.nickname, exported: have.length, imported, master_count: master.length });
+        } catch (e) { results.push({ user_id: a.user_id, nickname: a.nickname, error: e.message }); }
       }
       return send(res, 200, { status: 'OK', data: results });
     }
@@ -521,6 +587,8 @@ const server = http.createServer(async (req, res) => {
   } catch (e) {
     const code = e instanceof LocalApiError ? e.statusCode : 500;
     send(res, code, { status: 'FAIL', code: e.code || 'INTERNAL_ERROR', msg: e.message });
+  } finally {
+    if (ownsMutation) mutationBusy = false;
   }
 });
 

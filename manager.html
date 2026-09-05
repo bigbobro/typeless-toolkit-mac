@@ -10,10 +10,9 @@
 <div class="wrap">
   <header>
     <div>
-      <h1>Typeless 多账号管理</h1>
+      <h1>Typeless 多账号管理 <span class="tool-version" title="工具版本">v__TYPELESS_MANAGER_VERSION__</span></h1>
       <div class="sub">周额度 8,000 字/号 · 词库跨账号同步 · <button class="chip neutral" id="curLink" data-tip="检查 Typeless 管理连接与当前登录账号">正在检查…</button></div>
     </div>
-    <div class="hstat" id="hstat"></div>
   </header>
 
   <div class="banner warn" id="versionBanner"></div>
@@ -38,16 +37,18 @@
 
   <div class="toolbar">
     <button class="btn primary" id="launchBtn" data-tip="启动或重启 Typeless 一次，开启识别当前账号所需的管理连接" onclick="launch()">⏻ 连接 Typeless</button>
-    <button class="btn" data-tip="抓取当前 Typeless 已登录账号的凭证并加入管理器（会重载一次主窗口）" onclick="addAccount()">＋ 添加当前账号</button>
+    <button class="btn" data-tip="读取当前登录账号的凭证；已存在的账号会更新原记录" onclick="addAccount()">＋ 添加当前账号</button>
     <button class="btn" data-tip="重新拉取所有账号的用量、词库数、token 状态" onclick="loadAccounts()">↻ 全部刷新</button>
     <button class="btn" id="btnSyncAll" data-tip="所有账号词库互相补齐，并汇总进主词库" onclick="syncAll()">⇄ 全部同步</button>
     <button class="btn" data-tip="编辑作为同步基准的主词库（一行一个词）" onclick="openMaster()">✎ 主词库编辑</button>
     <button class="btn" data-tip="体检：Typeless 路径 / 调试端口 / 当前登录 / 补丁状态 / 数据目录一览" onclick="openDiag()">◇ 诊断</button>
     <span class="sep"></span>
-    <button class="btn danger" id="btnResetDevice" data-tip="重置设备 ID 回到登录页，以便注册新账号；当前账号会登出（有快照可切回）" onclick="resetDevice()">⊘ 解除设备限制</button>
+    <button class="btn danger" id="btnResetDevice" data-tip="重置设备并登出；切回需要完整快照和有效凭证" onclick="resetDevice()">⊘ 解除设备限制</button>
     <button class="btn danger" id="btnPatchPaywall" data-tr data-tip="给 Typeless 打补丁去掉升级/会员弹窗；App 自动更新后需重打" onclick="patchPaywall()">⊘ 解除弹窗提示</button>
   </div>
 
+  <div id="operationResult" class="banner" role="status" style="display:none"><span id="operationMsg"></span><button class="btn small" onclick="this.parentElement.style.display='none'">知道了</button></div>
+  <div id="accountsError" class="banner warn" role="alert" style="display:none"></div>
   <div id="grid" class="grid"></div>
 </div>
 
@@ -91,7 +92,7 @@
         <button class="btn small primary" id="btnSyncOne" data-tl data-tip="把该账号词库与主词库双向补齐" onclick="syncOne()">同步本账号</button>
         <button class="btn small" data-tip="仅把主词库里缺的词导入该账号（单向）" onclick="importMaster()">从主词库导入</button>
         <button class="btn small" data-tip="从另一个账号复制词库到该账号" onclick="copyFrom()">从其他号复制</button>
-        <button class="btn small" data-tip="把当前 Typeless 登录态存为该账号快照，供切换用" onclick="saveSnap()">更新快照</button>
+        <button class="btn small" data-tip="登录此账号后，一起更新登录凭证和快照" onclick="addAccount(curDetail.user_id)">更新登录</button>
         <span class="spacer"></span>
         <button class="btn small danger" data-tr data-tip="仅从管理器移除该账号，不影响 Typeless 本身" onclick="rmAccount()">移除账号</button>
       </div>
@@ -117,12 +118,13 @@
 <!-- 添加账号 -->
 <div class="mask" id="addMask" onclick="if(event.target===this)closeModal('addMask')">
   <div class="modal" style="width:min(440px,94vw)">
-    <div class="hd"><h3>添加账号</h3><button class="btn small" data-tr data-tip="关闭" onclick="closeModal('addMask')">✕</button></div>
+    <div class="hd"><h3 id="addTitle">添加账号</h3><button class="btn small" data-tr data-tip="关闭" onclick="closeModal('addMask')">✕</button></div>
     <div class="bd">
       <div id="addStep1">
-        <div style="font-size:13px;color:var(--mut);line-height:1.7;margin-bottom:12px;">先在 Typeless 里登录要添加的账号，然后点下方按钮。工具会自动抓取当前登录账号的凭证（会重载一次主窗口）。</div>
-        <button class="btn primary" data-tl data-tip="抓取当前 Typeless 登录账号的凭证（会重载一次主窗口）" onclick="doCapture()" id="capBtn">抓取当前账号</button>
-        <div class="add-reg-entry">
+        <div id="addIntro" class="recovery-note"></div>
+        <button class="btn" onclick="launch()">连接 Typeless</button>
+        <button class="btn primary" data-tl data-tip="读取 Typeless 当前登录账号的凭证" onclick="doCapture()" id="capBtn">我已登录，读取当前账号</button>
+        <div class="add-reg-entry" id="addRegEntry">
           还没有可添加的新账号？需要先在 Typeless 里登出、注册并登录一个新账号，再回来抓取。
           <div style="margin-top:8px;"><button class="btn small" data-tl data-tip="分步引导：登出 / 解除设备限制 → 注册并登录 → 自动检测并抓取" onclick="closeModal('addMask');openRegGuide()">→ 注册新账号引导</button></div>
         </div>
@@ -130,10 +132,12 @@
       <div id="addStep2" style="display:none">
         <div class="field"><label>昵称</label><input class="fld" id="addNick"></div>
         <div class="field"><label>邮箱</label><input class="fld" id="addEmail" readonly></div>
-        <div class="field"><label>套餐 / user_id</label><input class="fld" id="addMeta" readonly></div>
-        <button class="btn primary" data-tl data-tip="保存该账号到管理器，并自动把主词库导入此号" onclick="saveAccount()">保存</button>
+        <div class="field"><label>套餐</label><input class="fld" id="addMeta" readonly></div>
+        <button class="btn primary" id="addSaveBtn" data-tl data-tip="保存登录凭证和快照；同一账号会更新原记录" onclick="saveAccount()">保存</button>
+        <button class="btn" onclick="addAccount(ADD_TARGET_ID)">返回重新读取</button>
         <span id="addExist" style="font-size:12px;color:var(--amber);margin-left:10px;"></span>
       </div>
+      <div id="addError" class="recovery-error" role="alert"></div>
     </div>
   </div>
 </div>
@@ -148,9 +152,9 @@
         <div class="rg-num" id="rgNum1">1</div>
         <div class="rg-body">
           <div class="rg-title">让 Typeless 回到登录页</div>
-          <div class="rg-desc">在 Typeless 里登出当前账号（设置 → Sign out）。如果之后注册新账号时被<b>设备限制</b>拦住，再回来点「解除设备限制」重置设备 ID——当前账号已存快照的话，随时可以切回。</div>
+          <div class="rg-desc">在 Typeless 里登出当前账号（设置 → Sign out）。如果之后注册新账号时被<b>设备限制</b>拦住，再回来点「解除设备限制」重置设备 ID——切回需要完整快照和仍有效的登录凭证，否则需重新登录。</div>
           <div class="rg-hint" id="rgHint1"></div>
-          <div class="rg-act"><button class="btn small danger" data-tl data-tip="重置设备 ID 并登出，绕过同设备注册限制（有快照可切回当前账号）" onclick="resetDevice()">⊘ 解除设备限制</button></div>
+          <div class="rg-act"><button class="btn small danger" data-tl data-tip="重置设备并登出；切回需要完整快照和有效凭证" onclick="resetDevice()">⊘ 解除设备限制</button></div>
         </div>
       </div>
       <div class="rg-step" id="rgStep2">
@@ -166,7 +170,7 @@
         <div class="rg-body">
           <div class="rg-title">抓取并添加到管理器</div>
           <div class="rg-desc" id="rgDetected">检测到新账号登录后，这一步会自动亮起。</div>
-          <div class="rg-act" id="rgCapWrap" style="display:none"><button class="btn small primary" data-tl data-tip="抓取该账号凭证并保存到管理器（会重载一次主窗口，保存后自动导入主词库）" onclick="regCapture()">抓取并添加此账号</button></div>
+          <div class="rg-act" id="rgCapWrap" style="display:none"><button class="btn small primary" data-tl data-tip="读取该账号凭证并保存到管理器，保存后自动导入主词库" onclick="regCapture()">读取并添加此账号</button></div>
         </div>
       </div>
     </div>
@@ -212,7 +216,7 @@
   </div>
 </div>
 
-<!-- 全部同步:逐步展示每个账号的结果 -->
+<!-- 全部同步:展示每个账号的结果 -->
 <div class="mask" id="syncMask" onclick="if(event.target===this)closeModal('syncMask')">
   <div class="modal">
     <div class="hd"><h3>全部同步</h3><button class="btn small" data-tr data-tip="关闭" onclick="closeModal('syncMask')">✕</button></div>

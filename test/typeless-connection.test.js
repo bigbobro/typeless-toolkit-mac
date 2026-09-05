@@ -65,6 +65,17 @@ test('连接状态只区分管理端口是否可达', async () => {
   });
 });
 
+test('Typeless 登录页仍是可连接的管理窗口', () => {
+  const asarPath = '/Applications/Typeless.app/Contents/Resources/app.asar';
+  const target = {
+    type: 'page', title: 'Typeless Login',
+    url: pathToFileURL(asarPath).href + '/dist/renderer/login.html',
+    webSocketDebuggerUrl: `ws://127.0.0.1:${CDP_PORT}/devtools/page/login`,
+  };
+  assert.strictEqual(selectTypelessCdpTarget([target], { asarPath }), target);
+  assert.strictEqual(selectTypelessCdpTarget([{ ...target, url: 'https://typeless.com/login' }], { asarPath }), null);
+});
+
 test('管理端口已连接时不重启 Typeless', async () => {
   const result = await ensureApp({
     probePort: async () => ({ status: 'ready' }),

@@ -23,9 +23,10 @@
 body { margin:0; background:var(--bg); color:var(--ink); font-family:var(--ui); font-size:13px; line-height:1.45; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; }
 button, input, select, textarea { font-family:inherit; }
 .wrap { max-width:1180px; margin:0 auto; padding:28px 24px 64px; }
-header { margin-bottom:10px; position:relative; }
+header { margin-bottom:10px; }
 header h1 { font-size:20px; font-weight:650; margin:0; letter-spacing:-.015em; line-height:1.3; }
-header .sub { color:var(--mut); font-size:13px; margin-top:6px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; max-width:calc(100% - 300px); }
+header .tool-version { margin-left:6px; color:var(--mut); font-size:12px; font-weight:400; letter-spacing:0; white-space:nowrap; }
+header .sub { color:var(--mut); font-size:13px; margin-top:6px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
 
 /* ===== 悬停说明 tooltip ===== */
 [data-tip]{ position:relative; }
@@ -106,6 +107,9 @@ header .sub { color:var(--mut); font-size:13px; margin-top:6px; display:flex; al
 .card::before { content:''; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--grn); opacity:0; transition:opacity var(--t); }
 .card.on { border-color:var(--grn-line); box-shadow:var(--sh-1), 0 0 0 1px var(--grn-line); }
 .card.on::before { opacity:1; }
+.card.expired { border-color:var(--red-line); }
+.recovery-note { color:var(--mut); font-size:13px; line-height:1.7; margin:0 0 16px; }
+.recovery-error { color:var(--red); font-size:13px; line-height:1.6; margin-top:12px; }
 /* 首屏入场:只在第一次渲染时加 .in,--i 由 JS 写入(封顶 8),之后的刷新不再重放 */
 .card.in { animation:cardIn .26s var(--ease) both; animation-delay:calc(var(--i,0) * 35ms); }
 @keyframes cardIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
@@ -232,17 +236,6 @@ textarea#masterArea:focus, textarea.fld:focus { border-color:var(--grn); box-sha
 .banner.warn .x:hover { opacity:1; }
 .spin { width:13px; height:13px; flex:none; border:2px solid rgba(14,124,91,.22); border-top-color:var(--grn-d); border-radius:50%; animation:spin .7s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg); } }
-/* 开机自动检测进度条 */
-.boot-bar { height:5px; background:rgba(14,124,91,.14); border-radius:999px; overflow:hidden; }
-.boot-bar > i { display:block; height:100%; width:0; background:var(--grn-d); border-radius:999px; transition:width .35s var(--ease); }
-.boot-txt { display:flex; align-items:center; gap:8px; font-size:12.5px; white-space:nowrap; }
-.boot-txt .boot-step { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; }
-.boot-txt .cnt { flex:none; font-variant-numeric:tabular-nums; opacity:.65; }
-/* 右上浮层:只放“一次性反馈”(开机进度 / 已收录登录确认),绝对定位、淡入淡出,出现或消失都不推挤下方容器 */
-.hstat { position:absolute; top:2px; right:0; max-width:340px; box-sizing:border-box; background:var(--grn-t); border:1px solid var(--grn-line); color:var(--grn-d); border-radius:var(--r-lg); padding:9px 12px; font-size:12.5px; box-shadow:var(--sh-1);
-  opacity:0; transform:translateY(-4px); transition:opacity .25s, transform .25s var(--ease); pointer-events:none; z-index:5; }
-.hstat.on { opacity:1; transform:none; }
-.hstat .boot-bar { margin-top:7px; }
 /* 诊断面板 */
 .diag-row { display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid var(--line2); font-size:13px; }
 .diag-row:last-child { border:none; }
@@ -258,14 +251,6 @@ textarea#masterArea:focus, textarea.fld:focus { border-color:var(--grn); box-sha
 .diag-row .dv b { color:var(--ink); font-weight:600; }
 .diag-row .dv .warn { color:var(--amber); font-weight:600; }
 .diag-row .dv .bad { color:var(--red); font-weight:600; }
-.diag-row.in { animation:rowIn .26s var(--ease); }
-@keyframes rowIn { from { opacity:0; transform:translateY(-4px); } to { opacity:1; transform:none; } }
-.diag-prog { margin-bottom:14px; }
-.diag-prog-bar { height:6px; background:var(--line2); border-radius:999px; overflow:hidden; }
-.diag-prog-bar > i { display:block; height:100%; width:0; background:var(--grn); border-radius:999px; transition:width .35s var(--ease); }
-.diag-prog-txt { margin-top:9px; font-size:12.5px; color:var(--mut); display:flex; align-items:center; gap:8px; }
-.diag-prog-txt .cnt { margin-left:auto; font-variant-numeric:tabular-nums; color:var(--faint); }
-.diag-prog-txt.done { color:var(--grn-d); font-weight:600; }
 .toast { position:fixed; bottom:24px; left:50%; transform:translate(-50%,10px); background:#1c1e23; color:#f5f5f4; padding:10px 16px 10px 14px; border-radius:10px; font-size:13px; z-index:80;
   opacity:0; transition:opacity var(--t), transform var(--t) var(--ease); pointer-events:none; border:1px solid rgba(255,255,255,.06); box-shadow:0 12px 32px -8px rgba(20,22,26,.45);
   max-width:min(640px,92vw); display:flex; align-items:center; gap:9px; }
@@ -299,11 +284,6 @@ select.fld:focus { border-color:var(--grn); box-shadow:var(--focus); }
 
 @media (prefers-reduced-motion: reduce){
   *{ transition:none !important; animation:none !important; }
-}
-/* 窄屏:悬浮状态胶囊改回文档流,堆到标题下方,避免和标题/副标题重叠 */
-@media (max-width:760px){
-  header .sub { max-width:100%; }
-  .hstat { position:static; margin-top:8px; max-width:100%; transform:none; }
 }
 @media (max-width:520px){
   .wrap { padding:20px 14px 48px; }
