@@ -30,6 +30,55 @@ function loadUi(request, { realLoad = false } = {}) {
   return { ui, element };
 }
 
+function captureDownloads(ui) {
+  const blobs = [], downloads = [], revoked = [];
+  ui.Blob = Blob;
+  ui.URL = {
+    createObjectURL(blob) { blobs.push(blob); return 'blob:test-download'; },
+    revokeObjectURL(url) { revoked.push(url); },
+  };
+  ui.document.body = { appendChild() {} };
+  ui.document.createElement = () => ({
+    click() { downloads.push({ href: this.href, filename: this.download }); }, remove() {},
+  });
+  return { blobs, downloads, revoked };
+}
+
+test('导出已保存主词库为无表头单列 CSV,保留中文、逗号、引号和换行', async () => {
+  const requests = [];
+  const { ui, element } = loadUi((url, options) => {
+    requests.push({ url, method: options?.method || 'GET' });
+    return { status: 'OK', data: ['中文', 'hello,world', 'say "hi"', 'line\nbreak', '00123'] };
+  });
+  const { blobs, downloads, revoked } = captureDownloads(ui);
+  await ui.exportDictionary();
+  assert.deepEqual(requests, [{ url: '/api/master', method: 'GET' }]);
+  assert.deepEqual(downloads, [{ href: 'blob:test-download', filename: 'Typeless词库.csv' }]);
+  const bytes = Buffer.from(await blobs[0].arrayBuffer());
+  assert.equal(blobs[0].type, 'text/csv;charset=utf-8');
+  assert.deepEqual([...bytes.subarray(0, 3)], [0xef, 0xbb, 0xbf]);
+  assert.equal(bytes.toString('utf8'), '\uFEFF"中文"\r\n"hello,world"\r\n"say ""hi"""\r\n"line\nbreak"\r\n"00123"\r\n');
+  assert.deepEqual(revoked, ['blob:test-download']);
+  assert.equal(element('btnExportDictionary').disabled, false);
+});
+
+test('主词库为空或读取失败时不下载误导性文件,并恢复导出按钮', async () => {
+  for (const reply of [
+    () => ({ status: 'OK', data: [] }),
+    () => ({ status: 'FAIL', msg: '读取失败' }),
+    () => { throw Error('断开'); },
+  ]) {
+    const { ui, element } = loadUi(reply);
+    const { downloads } = captureDownloads(ui);
+    const messages = [];
+    ui.toast = message => messages.push(message);
+    await ui.exportDictionary();
+    assert.equal(downloads.length, 0);
+    assert.match(messages.join(' '), /主词库为空|导出失败/);
+    assert.equal(element('btnExportDictionary').disabled, false);
+  }
+});
+
 test('全部同步的请求失败显示错误,不伪装成没有账号,并解除操作锁', async () => {
   for (const reply of [() => ({ status: 'FAIL', msg: '账号文件损坏' }), () => { throw new Error('连接断开'); }]) {
     const { ui, element } = loadUi(reply);
@@ -49,6 +98,36 @@ test('失效卡片直接提供重新登录和移除,不显示剩余天数或切�
   assert.match(card, /重新登录/);
   assert.match(card, /移除/);
   assert.doesNotMatch(card, /283|切换到此号/);
+});
+
+test('统计读取被拒绝时显示原因和未知值,不伪装成零用量或未启用', () => {
+  const { ui, element } = loadUi(() => ({}));
+  const account = { user_id: 'target', login_status: 'valid', live: {
+    usage: null, personal: null, dict_count: null, error: '客户端不受支持 <test>',
+  } };
+  vm.runInContext(`ACCOUNTS=${JSON.stringify([account])};`, ui);
+  ui.render();
+  const card = element('grid').innerHTML;
+  assert.match(card, /客户端不受支持 &lt;test&gt;/);
+  assert.doesNotMatch(card, /8,000|>0%<|>0<|<test>/);
+  ui.renderUsage(account);
+  ui.renderPersonal(account);
+  for (const id of ['tab-usage', 'tab-personal']) {
+    assert.match(element(id).innerHTML, /读取失败.*客户端不受支持 &lt;test&gt;/);
+    assert.doesNotMatch(element(id).innerHTML, /未启用|>0%<|8,000/);
+  }
+});
+
+test('建立管理连接后重新读取账号统计,清除此前断连留下的占位', async () => {
+  const calls = [];
+  const { ui } = loadUi(url => {
+    calls.push(url);
+    return { status: 'OK', data: [] };
+  }, { realLoad: true });
+  ui.detectCurrent = async () => ({ state: 'connected', account_detected: true });
+  await ui.launch();
+  assert.ok(calls.indexOf('/api/accounts') > calls.indexOf('/api/launch'));
+  assert.equal(calls.filter(url => url === '/api/accounts').length, 1);
 });
 
 test('重新登录引导明确更新原账号,读到别的账号时不进入保存步骤', async () => {

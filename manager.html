@@ -36,11 +36,12 @@
   </div>
 
   <div class="toolbar">
-    <button class="btn primary" id="launchBtn" data-tip="启动或重启 Typeless 一次，开启识别当前账号所需的管理连接" onclick="launch()">⏻ 连接 Typeless</button>
+    <button class="btn primary" id="launchBtn" data-tip="连接 Typeless，读取账号状态、额度和词库" onclick="launch()">⏻ 连接 Typeless</button>
     <button class="btn" data-tip="读取当前登录账号的凭证；已存在的账号会更新原记录" onclick="addAccount()">＋ 添加当前账号</button>
     <button class="btn" data-tip="重新拉取所有账号的用量、词库数、token 状态" onclick="loadAccounts()">↻ 全部刷新</button>
     <button class="btn" id="btnSyncAll" data-tip="所有账号词库互相补齐，并汇总进主词库" onclick="syncAll()">⇄ 全部同步</button>
     <button class="btn" data-tip="编辑作为同步基准的主词库（一行一个词）" onclick="openMaster()">✎ 主词库编辑</button>
+    <button class="btn" id="btnExportDictionary" data-tip="将已保存的主词库下载为单列 CSV，一行一个词" onclick="exportDictionary()">↓ 导出词库</button>
     <button class="btn" data-tip="体检：Typeless 路径 / 调试端口 / 当前登录 / 补丁状态 / 数据目录一览" onclick="openDiag()">◇ 诊断</button>
     <span class="sep"></span>
     <button class="btn danger" id="btnResetDevice" data-tip="重置设备并登出；切回需要完整快照和有效凭证" onclick="resetDevice()">⊘ 解除设备限制</button>

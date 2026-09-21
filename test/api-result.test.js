@@ -52,6 +52,13 @@ test('API 返回业务错误时抛错并带上错误文案', () => {
   );
 });
 
+test('客户端被拒绝时优先展示具体原因,保留业务错误码', () => {
+  assert.throws(
+    () => assertApiOk({ status: 'FAIL', code: 20006, msg: 'HTTPException', detail: 'This client is not supported. Please use the official Typeless app.' }, '读取账号词库'),
+    e => e.message.includes('This client is not supported') && e.message.includes('20006'),
+  );
+});
+
 test('null / undefined / 非对象响应都必须抛错', () => {
   for (const bad of [null, undefined, 'OK', 0, []]) {
     assert.throws(() => assertApiOk(bad, '读取账号词库'), /读取账号词库失败/);

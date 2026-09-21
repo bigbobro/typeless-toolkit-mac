@@ -34,7 +34,7 @@ function setConnectionUi(state,label){
     el.classList.add('waiting'); el.textContent='管理连接未开启';
     el.dataset.tip='重新检查 Typeless 管理连接状态';
     btn.textContent='⏻ 连接 Typeless'; btn.disabled=false;
-    btn.dataset.tip='启动或重启 Typeless 一次，开启识别当前账号所需的管理连接';
+    btn.dataset.tip='连接 Typeless，读取账号状态、额度和词库';
   }else if(state==='connected'){
     el.textContent=label?('当前: '+label):'管理连接已建立';
     el.dataset.tip='重新检测当前 Typeless 登录账号并在下方高亮';
@@ -217,6 +217,7 @@ async function launch(){
     if(r.status!=='OK') throw new Error(r.msg||'管理连接启动失败');
     const current=await detectCurrent(true);
     if(current?.state==='connected'){
+      await loadAccounts();
       toast(current.account_detected?'Typeless 已连接，当前账号已识别':'Typeless 管理连接已建立','ok');
     }else{
       setConnectionUi('disconnected');
@@ -284,13 +285,14 @@ function render(){
         <div class="cfoot">
           <button class="btn small danger" data-action="remove-account" data-account-id="${esc(a.user_id)}">移除</button>
           <button class="cbtn" data-action="recover-account" data-account-id="${esc(a.user_id)}">重新登录</button>
-        </div>`:`<div class="qrow"><span>本周额度</span><b>${ok?used.toLocaleString():'—'} / ${lim.toLocaleString()}</b></div>
+        </div>`:`${live.error?`<p class="recovery-note">${esc(live.error)}</p>`:''}
+        <div class="qrow"><span>本周额度</span><b>${ok?used.toLocaleString():'—'} / ${u.week_word_usage_limit!=null?lim.toLocaleString():'—'}</b></div>
         <div class="qtrack ${over?'over':(p>80?'warn':'')}"><i style="width:${ok?(over?100:p):0}%"></i></div>
         <div class="qrow"><span>剩余字数</span><b>${ok?(lim-used).toLocaleString():'—'}</b></div>
         <div class="mini">
           <div class="m"><div class="k">词库词条</div><div class="v">${live.dict_count??'-'}</div></div>
-          <div class="m"><div class="k">个性化</div><div class="v">${Math.round((live.personal?.total_learning_ratio||0)*100)}%</div></div>
-          <div class="m"><div class="k">总字数</div><div class="v">${(u.total_words||0).toLocaleString()}</div></div>
+          <div class="m"><div class="k">个性化</div><div class="v">${live.personal?.total_learning_ratio!=null?Math.round(live.personal.total_learning_ratio*100)+'%':'—'}</div></div>
+          <div class="m"><div class="k">总字数</div><div class="v">${u.total_words!=null?u.total_words.toLocaleString():'—'}</div></div>
         </div>
         <div class="cfoot">
           <span class="snap">${snapTxt}</span>
@@ -376,6 +378,10 @@ document.getElementById('wordList').addEventListener('keydown',e=>{
   if(btn){ e.preventDefault(); delWord(btn.dataset.term); }
 });
 function renderUsage(a){
+  if(!a.live?.usage){
+    document.getElementById('tab-usage').innerHTML=`<div class="empty">用量读取失败：${esc(a.live?.error||'暂未获取到数据，请刷新重试')}</div>`;
+    return;
+  }
   const u=a.live?.usage||{};
   const ok=u.week_word_usage_value!=null;
   const used=ok?u.week_word_usage_value:0, lim=u.week_word_usage_limit||8000;
@@ -403,6 +409,10 @@ function renderUsage(a){
   </div>`;
 }
 function renderPersonal(a){
+  if(!a.live?.personal){
+    document.getElementById('tab-personal').innerHTML=`<div class="empty">个性化统计读取失败：${esc(a.live?.error||'暂未获取到数据，请刷新重试')}</div>`;
+    return;
+  }
   const p=a.live?.personal||{}; const ratio=p.total_learning_ratio||0;
   document.getElementById('tab-personal').innerHTML=`<div style="text-align:center">
     <div class="ring" style="--p:${Math.round(ratio*100)}"><span>${Math.round(ratio*100)}%</span></div>
@@ -748,6 +758,29 @@ function updateQuotaBanner(){
     +'<span style="display:flex;gap:10px;align-items:center;flex:none;">'
     +'<button class="btn small" data-tip="分步引导：登出 / 解除设备限制 → 注册并登录 → 自动检测并抓取" onclick="openRegGuide()">→ 注册新账号引导</button>'
     +'<span class="x" data-tip="本次会话不再提示" onclick="QUOTA_DISMISSED=true;updateQuotaBanner()">✕</span></span>';
+}
+
+async function exportDictionary(){
+  const btn=document.getElementById('btnExportDictionary');
+  if(btn.disabled) return;
+  btn.disabled=true;
+  try{
+    const r=await api('/api/master');
+    if(r.status!=='OK') throw new Error(r.msg||'主词库读取失败');
+    if(!Array.isArray(r.data)) throw new Error('词库数据格式异常');
+    if(!r.data.length){ toast('主词库为空，没有可导出的词条'); return; }
+    // 每个词始终作为一个 CSV 字段;UTF-8 BOM 便于表格软件识别中文。
+    const csv='\uFEFF'+r.data.map(term=>'"'+term.replace(/"/g,'""')+'"').join('\r\n')+'\r\n';
+    const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
+    const a=document.createElement('a');
+    try{
+      a.href=url; a.download='Typeless词库.csv'; document.body.appendChild(a); a.click();
+    }finally{
+      a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1000);
+    }
+    toast(`已开始下载 ${r.data.length} 条词库`,'ok');
+  }catch(e){ toast('导出失败: '+(e.message||'未知原因'),'err'); }
+  finally{ btn.disabled=false; }
 }
 
 async function openMaster(){

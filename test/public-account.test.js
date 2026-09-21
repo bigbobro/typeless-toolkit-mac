@@ -106,6 +106,7 @@ test('实时状态 DTO 把缺失或非有限数值归一为 null', () => {
     enabled: false,
     category_count: null,
   });
+  assert.strictEqual(view.dict_count, null);
 });
 
 test('词库 DTO 只下发 term 和布尔 auto', () => {

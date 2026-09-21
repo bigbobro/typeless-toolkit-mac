@@ -2,7 +2,7 @@
 
 [![test](https://github.com/bigbobro/typeless-toolkit-mac/actions/workflows/test.yml/badge.svg)](https://github.com/bigbobro/typeless-toolkit-mac/actions/workflows/test.yml)
 
-当前版本：[v2.7.1](https://github.com/bigbobro/typeless-toolkit-mac/releases/tag/macos-v2.7.1)。运行中的工具版本显示在管理器页面标题旁。
+当前版本：[v2.8.0](https://github.com/bigbobro/typeless-toolkit-mac/releases/tag/macos-v2.8.0)。运行中的工具版本显示在管理器页面标题旁。
 
 给 **macOS 上的 Typeless** 用的本机管理器：把多个账号收在一个页面里，切号、对齐词库、处理设备限制、去掉升级/会员弹窗。数据只留在本机，打开浏览器操作，不用注册云端、也不用 `npm install`。
 
@@ -62,7 +62,7 @@ open http://127.0.0.1:7788
 
 仅关闭网页不会退出管理器；旧进程仍在运行时，启动脚本会复用它。同一台 Mac、同一个 macOS 用户升级时，已保存的账号、快照和主词库仍使用原数据目录。
 
-顶部 **「管理连接未开启」不等于账号掉线**。账号卡片可凭已存 token 刷新用量；只有识别/抓取「当前桌面端登录的是谁」才需要管理连接。点「连接 Typeless」后页面会等到连上（若 Typeless 已普通启动，会自动重启一次以打开调试口）。
+顶部 **「管理连接未开启」不等于账号掉线**。读取额度、词库和个人统计需要保持 Typeless 的管理连接：工具会调用本机官方客户端生成请求校验信息。点「连接 Typeless」后页面会等到连上并重新读取账号统计（若 Typeless 已普通启动，会自动重启一次以打开调试口）。日常刷新不会自行重启应用；连接不可用时会显示操作指引。
 
 单独拉起带调试口的 Typeless 可用：`启动Typeless(带调试端口).command`。
 
@@ -104,6 +104,8 @@ lsof -nP -iTCP:9222 -sTCP:LISTEN
 
 ### 词库怎么对齐
 
+词库操作需要先连接 Typeless。工具用已保存的刷新凭证换取同账号访问令牌，再通过本机官方运行时生成请求校验头；多账号同步无需逐个切换桌面端登录。访问令牌只短暂缓存在内存中，签名密钥不提取、不保存。官方客户端更新若改变内部接口，工具会明确报错；读取失败不会被显示为空词库或零用量。
+
 同步两步，都是只增：
 
 1. 各账号导出 → 合并进 `Typeless词库主清单.csv`
@@ -115,7 +117,9 @@ lsof -nP -iTCP:9222 -sTCP:LISTEN
 > **删词只删单个账号的云端，不删主词库。** 因为同步只增不删，只要还有**任何一个**账号持有这个词，下次同步就会把它并回主词库、再发回所有账号。要永久删掉一个词，得在**所有持有它的账号**里都删一遍，**再**到「✎ 主词库编辑」删掉那一行。
 > 触发面比想象宽：切号后会自动同步该账号，你不点任何按钮词也会回来。
 
-工具栏另有两个入口：**✎ 主词库编辑** 直接改 `Typeless词库主清单.csv` 的内容（保存即写盘）；**↻ 全部刷新** 重新拉一遍所有账号的额度与状态。
+工具栏的 **↓ 导出词库** 会下载已保存的主词库，文件名为 `Typeless词库.csv`：单列、无表头，一行一个词，采用 UTF-8 编码并带 BOM，支持中文及包含逗号、引号的词条。导出只读取本地数据，无需连接 Typeless；如需包含各账号最新词条，先执行「全部同步」。主词库编辑中的修改需先保存再导出。
+
+**✎ 主词库编辑** 直接改 `Typeless词库主清单.csv` 的内容（保存即写盘）；**↻ 全部刷新** 重新拉一遍所有账号的额度与状态。
 
 可选 CLI（只动当前登录号、或你要写脚本时）：
 
@@ -247,6 +251,7 @@ codesign --verify --deep --strict /Applications/Typeless.app
 | `lib/common.js` | 账号、快照、API、同步、版本漂移；装配 paths / private-fs / cdp / runtime-backup / paywall-patch 并统一对外转发 |
 | `lib/paths.js` | 路径探测与配置加载（启动时一次算好） |
 | `lib/cdp.js` | CDP 管理连接（端口探测、目标校验、读取主进程身份和刷新凭证） |
+| `lib/typeless-api.js` | 访问令牌刷新、按账号隔离缓存、调用官方运行时生成请求校验头 |
 | `lib/runtime-backup.js` | 运行数据备份 / 恢复事务 |
 | `lib/paywall-patch.js` | 去弹窗补丁（asar 解析、等长替换、重签名） |
 | `lib/private-fs.js` | 私有目录与原子写入 |

@@ -144,7 +144,7 @@ function publicLiveStatus(live = {}) {
     token_valid: source.token_valid !== false,
     usage,
     personal,
-    dict_count: Number.isFinite(source.dict_count) ? source.dict_count : 0,
+    dict_count: Number.isFinite(source.dict_count) ? source.dict_count : null,
     ...(source._err ? { error: String(source._err).slice(0, 300) } : {}),
   };
 }
