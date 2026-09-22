@@ -4,6 +4,7 @@ profiles/
 runtime-backups/
 patch-backups/
 typeless-version.json
+rotation.json
 *.csv
 *.bak
 

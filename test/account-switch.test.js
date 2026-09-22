@@ -47,7 +47,7 @@ function manager(refresh, verified = true, overrides = {}) {
       if (name === './lib/local-api-security') {
         return { ...require('../lib/local-api-security'), createLocalApiSecurity: () => ({ assertApiRequest() {}, readJson: req => req.body }) };
       }
-      return require(name);
+      return require(name.startsWith('./lib/') ? '../' + name.slice(2) : name);
     },
     module: { exports: {} }, console, process, Buffer, URL,
   });

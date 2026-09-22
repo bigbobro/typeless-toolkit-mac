@@ -12,6 +12,9 @@ const path = require('path');
 const crypto = require('crypto');
 
 const C = require('./lib/common');
+const { createAccountRotation, createRotationStore } = require('./lib/account-rotation');
+const { createRotationNotifier } = require('./lib/rotation-notifier');
+const { makeRotationIssue, issueForError } = require('./lib/rotation-issues');
 const {
   LocalApiError,
   applySecurityHeaders,
@@ -27,7 +30,7 @@ const {
   killTypeless, launchTypeless, resetDevice,
   readMaster, writeMaster,
   curlApi, assertApiOk, typelessConnectionStatus, ensureApp, captureTokenCDP,
-  liveStatus, syncAccount,
+  liveStatus, syncAccount, readAccountUsage, readActiveAccountId,
   paywallStatus, patchPaywall,
   getTypelessVersion, versionDriftStatus, writeVersionState,
   accountMetaFromUserInfo,
@@ -44,6 +47,7 @@ const security = createLocalApiSecurity({ port: PORT });
 const pendingCaptures = new Map();
 const CAPTURE_TTL_MS = 2 * 60 * 1000;
 let mutationBusy = false;
+let rotation;
 // 首页之外允许下发的静态文件:请求路径 → Content-Type。nosniff 之下类型必须精确。
 const STATIC_ASSETS = Object.freeze({
   '/manager.css': 'text/css; charset=utf-8',
@@ -113,6 +117,134 @@ async function checkAccountLogin(account) {
     if (result?.code === 402) return 'expired';
     return typeof result?.access_token === 'string' && result.access_token ? 'valid' : 'unknown';
   } catch (_) { return 'unknown'; }
+}
+
+// 人工切号与后台轮动共用同一事务，调用方统一持有 mutationBusy。
+async function switchSavedAccount(id, beforeSwitch = async () => {}) {
+  const account = requireAccount(id);
+  if (!hasSnapshot(id)) throw new LocalApiError(400, 'SNAPSHOT_INVALID', '登录快照缺失或账号不匹配，请先在 Typeless 登录该号后点「更新登录」');
+  const loginStatus = await checkAccountLogin(account);
+  if (loginStatus === 'expired') throw new LocalApiError(400, 'ACCOUNT_LOGIN_EXPIRED', '该账号登录凭证已失效,本次未切换。请点卡片上的「重新登录」更新原账号,或选择「移除」。');
+  if (loginStatus !== 'valid') throw new LocalApiError(502, 'LOGIN_CHECK_FAILED', '无法验证该账号的登录凭证,请检查网络后重试。本次未切换。');
+  await beforeSwitch();
+  await killTypeless(); await sleep(1500);
+  const previousId = readCurrentLogin()?.user_id;
+  let recoveryDir, keepRecovery = false;
+  try { recoveryDir = backupCurrentLogin(); }
+  catch (error) { launchTypeless(); throw error; }
+  try {
+    restoreSnapshot(id);
+    launchTypeless();
+    await verifyCurrentLogin(id);
+  } catch (error) {
+    try {
+      await killTypeless();
+      restoreLoginFiles(readLoginFiles(recoveryDir));
+      launchTypeless();
+      if (previousId) await verifyCurrentLogin(previousId);
+    } catch (rollback) {
+      keepRecovery = true;
+      throw new LocalApiError(500, 'SWITCH_RECOVERY_REQUIRED', '切换失败，原登录态也未能确认恢复。请在 Typeless 重新登录，再通过「添加当前账号」更新原记录。切换前备份保留在 '+recoveryDir+'。'+rollback.message);
+    }
+    throw new LocalApiError(500, 'SWITCH_ROLLED_BACK', '切换失败，已恢复切换前的登录状态。请更新目标账号的登录后重试。'+error.message);
+  } finally {
+    if (!keepRecovery) fs.rmSync(recoveryDir, { recursive: true, force: true });
+  }
+}
+
+function usableRotationQuota(usage, threshold) {
+  const limit = usage?.week_word_usage_limit, used = usage?.week_word_usage_value;
+  // -1 表示不限额；缺失或 0 不猜成无限额度，避免轮动到服务端已不可用的账号。
+  return Number.isSafeInteger(used) && used >= 0 && Number.isFinite(limit) && limit !== 0
+    && used < threshold && (limit < 0 || used < limit);
+}
+
+async function rotateAccount({ fromId, settings, canProceed }) {
+  if (mutationBusy || !canProceed()) return { switched: false, message: '其他操作正在进行，本次未切换' };
+  const issues = new Map();
+  const context = account => ({ accountId: account?.user_id, accountName: account?.nickname || account?.email });
+  const remember = (account, issue) => { issues.set(account.user_id, issue); return issue; };
+  const blocked = issue => ({ switched: false, retryable: issue.retryable, issue,
+    message: issue.retryable ? '切号前检查未完成，保持当前账号，下次检查重试：' + issue.message : issue.message,
+    issues: [...issues.values()],
+  });
+  mutationBusy = true;
+  try {
+    let accounts, index;
+    try {
+      if (await readActiveAccountId() !== fromId || !canProceed()) return { switched: false, message: '当前账号已变化，本次未切换' };
+      accounts = readAccounts();
+      index = accounts.findIndex(account => account.user_id === fromId);
+      if (index < 0) return { switched: false, message: '当前账号已移除，本次未切换' };
+      const trigger = settings.mode === 'auto' ? settings.word_threshold : settings.word_threshold - settings.warning_words;
+      if ((await readAccountUsage(accounts[index])).week_word_usage_value < trigger) {
+        return { switched: false, message: '当前账号用量已低于提醒线，本次未切换' };
+      }
+    } catch (error) {
+      if (!canProceed()) return { switched: false, message: '轮动设置已改变，本次未切换' };
+      const account = accounts?.[index] || { user_id: fromId };
+      return blocked(remember(account, issueForError(error, context(account))));
+    }
+    if (accounts.length < 2) return blocked(makeRotationIssue('NO_CANDIDATES'));
+    // 候选按页面中的保存顺序循环，逐个检查，找到一个即可。无需一次请求所有账号。
+    for (let offset = 1; offset < accounts.length; offset++) {
+      if (!canProceed()) return { switched: false, message: '轮动设置已改变，本次未切换' };
+      const candidate = accounts[(index + offset) % accounts.length];
+      if (!hasSnapshot(candidate.user_id)) {
+        remember(candidate, makeRotationIssue('SNAPSHOT_INVALID', context(candidate))); continue;
+      }
+      let usage;
+      try { usage = await readAccountUsage(candidate); }
+      catch (error) { remember(candidate, issueForError(error, context(candidate))); continue; }
+      if (!usableRotationQuota(usage, settings.word_threshold)) {
+        // 缺失统计不能猜成额度已用完，保留可重试的读取异常。
+        const valid = Number.isSafeInteger(usage?.week_word_usage_value) && usage.week_word_usage_value >= 0
+          && Number.isFinite(usage.week_word_usage_limit);
+        remember(candidate, makeRotationIssue(valid ? 'ACCOUNT_QUOTA_EXHAUSTED' : 'REQUEST_FAILED', context(candidate)));
+        continue;
+      }
+      let preflightPassed = false;
+      try {
+        await switchSavedAccount(candidate.user_id, async () => {
+          const activeId = await readActiveAccountId();
+          if (!canProceed() || activeId !== fromId) {
+            const error = new Error('当前登录或设置已变化，已停止轮动');
+            error.code = 'ROTATION_CANCELLED';
+            throw error;
+          }
+          preflightPassed = true;
+        });
+      } catch (error) {
+        // 尚未触碰客户端的失效候选可以跳过；真实切换失败交给回滚并暂停轮动。
+        if (!canProceed() || error.code === 'ROTATION_CANCELLED') return { switched: false, message: '当前登录或设置已变化，本次未切换' };
+        const issue = remember(candidate, issueForError(error, context(candidate)));
+        if (['SNAPSHOT_INVALID', 'ACCOUNT_LOGIN_EXPIRED', 'LOGIN_CHECK_FAILED'].includes(error.code)) continue;
+        if (!preflightPassed) return blocked(issue);
+        error.issue = issue;
+        error.issues = [...issues.values()];
+        throw error;
+      }
+      let message = '已切换到「' + (candidate.nickname || candidate.email || candidate.user_id) + '」';
+      try { await syncAccount(candidate); message += '，词库已同步'; }
+      catch (_) { message += '；词库同步未完成，可在账号详情重试'; }
+      return { switched: true, user_id: candidate.user_id, message, retryable: false, issues: [...issues.values()] };
+    }
+    const skipped = [...issues.values()];
+    const issue = skipped.length === 1 ? skipped[0] : {
+      ...makeRotationIssue('NO_AVAILABLE_ACCOUNTS'), retryable: skipped.some(value => value.retryable),
+    };
+    return { switched: false, retryable: issue.retryable, issue, issues: skipped,
+      message: '没有可用的下一个账号。' + issue.message + (issue.retryable ? ' 下次检查会重试。' : '') };
+  } finally { mutationBusy = false; }
+}
+
+function getRotation() {
+  if (!rotation) rotation = createAccountRotation({
+    store: createRotationStore(path.join(C.ROOT, 'rotation.json')),
+    readAccounts, readCurrentAccountId: readActiveAccountId, readUsage: readAccountUsage,
+    isBusy: () => mutationBusy, rotate: rotateAccount, notifier: createRotationNotifier({ managerUrl: `http://127.0.0.1:${PORT}/#rotation` }),
+  });
+  return rotation;
 }
 
 function publicLiveStatus(live = {}) {
@@ -229,6 +361,15 @@ const server = http.createServer(async (req, res) => {
     if (p.startsWith('/api/') && (m !== 'GET' || p === '/api/backup-export')) {
       if (mutationBusy) throw new LocalApiError(409, 'OPERATION_BUSY', '正在处理其他操作，请完成后重试');
       mutationBusy = true; ownsMutation = true;
+      if (p !== '/api/rotation') rotation?.invalidate();
+    }
+    if (m === 'GET' && p === '/api/rotation') return send(res, 200, { status: 'OK', data: getRotation().view() });
+    if (m === 'POST' && p === '/api/rotation') {
+      const body = await readObjectBody(req);
+      let data;
+      try { data = getRotation().configure(body); }
+      catch (error) { throw new LocalApiError(400, 'ROTATION_SETTINGS_FAILED', error.message); }
+      return send(res, 200, { status: 'OK', data });
     }
     // 账号列表(含实时状态)
     if (m === 'GET' && p === '/api/accounts') {
@@ -358,39 +499,7 @@ const server = http.createServer(async (req, res) => {
     }
     // 切换到此账号(还原快照 + 重启 Typeless)
     if (m === 'POST' && p.startsWith('/api/accounts/') && p.endsWith('/switch')) {
-      const id = pathAccountId(p);
-      const account = requireAccount(id);
-      if (!hasSnapshot(id)) return send(res, 400, { status: 'FAIL', code: 'SNAPSHOT_INVALID', msg: '登录快照缺失或账号不匹配，请先在 Typeless 登录该号后点「更新登录」' });
-      const loginStatus = await checkAccountLogin(account);
-      if (loginStatus === 'expired') {
-        return send(res, 400, { status: 'FAIL', code: 'ACCOUNT_LOGIN_EXPIRED', msg: '该账号登录凭证已失效,本次未切换。请点卡片上的「重新登录」更新原账号,或选择「移除」。' });
-      }
-      if (loginStatus !== 'valid') {
-        return send(res, 502, { status: 'FAIL', code: 'LOGIN_CHECK_FAILED', msg: '无法验证该账号的登录凭证,请检查网络后重试。本次未切换。' });
-      }
-      await killTypeless(); await sleep(1500);
-      const previousId = readCurrentLogin()?.user_id;
-      let recoveryDir, keepRecovery = false;
-      try { recoveryDir = backupCurrentLogin(); }
-      catch (e) { launchTypeless(); throw e; }
-      try {
-        restoreSnapshot(id);
-        launchTypeless();
-        await verifyCurrentLogin(id);
-      } catch (e) {
-        try {
-          await killTypeless();
-          restoreLoginFiles(readLoginFiles(recoveryDir));
-          launchTypeless();
-          if (previousId) await verifyCurrentLogin(previousId);
-        } catch (rollback) {
-          keepRecovery = true;
-          throw new LocalApiError(500, 'SWITCH_RECOVERY_REQUIRED', '切换失败，原登录态也未能确认恢复。请在 Typeless 重新登录，再通过「添加当前账号」更新原记录。切换前备份保留在 '+recoveryDir+'。'+rollback.message);
-        }
-        throw new LocalApiError(500, 'SWITCH_ROLLED_BACK', '切换失败，已恢复切换前的登录状态。请更新目标账号的登录后重试。'+e.message);
-      } finally {
-        if (!keepRecovery) fs.rmSync(recoveryDir, { recursive: true, force: true });
-      }
+      await switchSavedAccount(pathAccountId(p));
       return send(res, 200, { status: 'OK', msg: '已切换并重启 Typeless' });
     }
     // 解除设备限制(重置设备 ID,准备注册新账号)
@@ -606,11 +715,29 @@ server.on('clientError', (_error, socket) => {
 });
 
 function startServer() {
-  server.listen(PORT, '127.0.0.1', () => { log('[mgr] 管理器运行于 http://127.0.0.1:' + PORT); });
+  server.listen(PORT, '127.0.0.1', () => {
+    getRotation().start();
+    log('[mgr] 管理器运行于 http://127.0.0.1:' + PORT);
+  });
   return server;
 }
 
-if (require.main === module) startServer();
+server.on('close', () => rotation?.stop());
+
+if (require.main === module) {
+  startServer();
+  // 先停止调度并取消未确认弹窗。已经开始的登录事务完成/回滚后再退出。
+  let stopping = false;
+  const shutdown = () => {
+    if (stopping) return;
+    stopping = true;
+    rotation?.stop();
+    server.close();
+  };
+  process.once('SIGINT', shutdown);
+  process.once('SIGTERM', shutdown);
+  process.once('SIGHUP', shutdown);
+}
 
 module.exports = {
   publicAccount,
@@ -618,4 +745,5 @@ module.exports = {
   publicDictionary,
   publicLiveStatus,
   safeCount,
+  startServer,
 };

@@ -35,6 +35,21 @@
     <input id="backupFile" type="file" accept="application/json,.json" style="display:none" onchange="restoreBackupFile(this)">
   </div>
 
+  <section class="rotation-panel" id="rotation" aria-label="账号轮动">
+    <div class="rotation-main">
+      <div class="rotation-heading"><strong>账号轮动</strong><span class="backup-badge" id="rotationBadge">检查中</span><span class="rotation-summary" id="rotationSummary">默认每 15 分钟检查一次</span></div>
+      <div class="rotation-message" id="rotationMessage" role="status">正在读取后台状态…</div>
+      <div class="rotation-times" id="rotationTimes"></div>
+      <div class="rotation-last-result" id="rotationLastResult" hidden></div>
+      <div class="rotation-notification-error" id="rotationNotificationError" hidden></div>
+      <div class="rotation-issues" id="rotationIssues" aria-live="polite" hidden></div>
+    </div>
+    <div class="rotation-actions">
+      <button class="btn small" onclick="loadRotationStatus()" data-tip="只读取后台状态，不立即查询 Typeless 用量">刷新状态</button>
+      <button class="btn small" onclick="openRotationSettings()">轮动设置</button>
+    </div>
+  </section>
+
   <div class="toolbar">
     <button class="btn primary" id="launchBtn" data-tip="连接 Typeless，读取账号状态、额度和词库" onclick="launch()">⏻ 连接 Typeless</button>
     <button class="btn" data-tip="读取当前登录账号的凭证；已存在的账号会更新原记录" onclick="addAccount()">＋ 添加当前账号</button>
@@ -51,6 +66,29 @@
   <div id="operationResult" class="banner" role="status" style="display:none"><span id="operationMsg"></span><button class="btn small" onclick="this.parentElement.style.display='none'">知道了</button></div>
   <div id="accountsError" class="banner warn" role="alert" style="display:none"></div>
   <div id="grid" class="grid"></div>
+</div>
+
+<!-- 账号轮动：调度与原生提醒由后端执行，网页只配置与显示状态 -->
+<div class="mask" id="rotationMask" onclick="if(event.target===this)closeModal('rotationMask')">
+  <div class="modal rotation-modal" role="dialog" aria-modal="true" aria-labelledby="rotationTitle">
+    <div class="hd"><h3 id="rotationTitle">账号轮动</h3><button class="btn small" aria-label="关闭轮动设置" onclick="closeModal('rotationMask')">✕</button></div>
+    <form class="bd" onsubmit="event.preventDefault();saveRotationSettings()">
+      <label class="rotation-toggle"><input type="checkbox" id="rotationEnabled">启用后台轮动检查</label>
+      <p class="rotation-help">按当前账号本周累计词数判断。后端运行时，关闭网页仍会检查和提醒；关闭启动终端会停止后端。</p>
+      <div class="rotation-fields">
+        <div class="field"><label for="rotationThreshold">轮动阈值（词）</label><input class="fld" id="rotationThreshold" type="number" min="1" max="10000000" step="1" required oninput="updateRotationForm()"></div>
+        <div class="field"><label for="rotationInterval">检查间隔</label><select class="fld" id="rotationInterval" onchange="updateRotationForm()"><option value="10">每 10 分钟</option><option value="15">每 15 分钟</option><option value="30">每 30 分钟</option></select></div>
+      </div>
+      <div class="field"><label for="rotationMode">达到条件时</label><select class="fld" id="rotationMode" onchange="updateRotationForm()"><option value="notify">弹出 macOS 提示，由我确认切换</option><option value="auto">达到阈值后直接切换</option></select></div>
+      <div class="field" id="rotationWarningField"><label for="rotationWarning">提前多少词提醒</label><input class="fld" id="rotationWarning" type="number" min="0" step="1" required oninput="updateRotationForm()"></div>
+      <p class="rotation-help" id="rotationCondition"></p>
+      <p class="rotation-help" id="rotationCadence"></p>
+      <p class="rotation-caution" id="rotationAutoWarning" hidden>自动切换会重启 Typeless，可能中断正在进行的语音输入。切换失败后暂停，检查原因并重新保存设置可恢复。</p>
+      <p class="rotation-help">按账号列表顺序选择下一个可用账号。</p>
+      <div class="recovery-error" id="rotationError" role="alert"></div>
+      <div class="confirm-actions"><button class="btn small" type="button" onclick="closeModal('rotationMask')">取消</button><button class="btn small primary" type="submit" id="rotationSaveBtn">保存设置</button></div>
+    </form>
+  </div>
 </div>
 
 <!-- 账号详情 -->

@@ -18,6 +18,155 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 let ACCOUNTS = [], CUR_ID = null, curDetail = null, curWords = [], dictFilter = 'all', dictError = null;
 let CONNECTION_STATE = 'checking', CONNECTION_BUSY = false, CURRENT_DETECTING = false;
 
+// 轮动调度只在后端运行。页面初始化、手动刷新和重新聚焦时读取本地状态，不另设轮询。
+let ROTATION_DATA=null, ROTATION_LOADING=null, ROTATION_SAVING=false, ROTATION_REVISION=0;
+let ROTATION_ISSUES=[], ROTATION_RECOVERING=false;
+const ROTATION_ACTION_LABELS={
+  'add-account':'添加当前账号', 'update-login':'更新登录', connect:'连接 Typeless',
+  accounts:'查看账号', settings:'轮动设置', 'reset-device':'解除设备限制',
+};
+function rotationAccountName(id){
+  const account=ACCOUNTS.find(value=>value.user_id===id);
+  return account?.nickname||account?.email||id||'相应账号';
+}
+function renderRotationIssues(status){
+  ROTATION_ISSUES=[];
+  const row=(issue,candidate=false)=>{
+    if(!issue||typeof issue!=='object') return '';
+    const index=ROTATION_ISSUES.push(issue)-1;
+    const label=Object.hasOwn(ROTATION_ACTION_LABELS,issue.action)?ROTATION_ACTION_LABELS[issue.action]:null;
+    const message=String(issue.message||issue.code||'轮动需要处理');
+    const account=candidate&&issue.account_id&&!message.startsWith('「')?'「'+rotationAccountName(issue.account_id)+'」：':'';
+    const hint=issue.action==='update-login'?'请先在 Typeless 登录「'+rotationAccountName(issue.account_id)+'」，再更新登录。':'';
+    return '<div class="rotation-issue"><div class="rotation-issue-copy"><strong>'+esc(account+message)+'</strong>'
+      +(hint?'<div class="rotation-issue-hint">'+esc(hint)+'</div>':'')+'</div>'
+      +(label?'<button class="btn small'+(issue.action==='reset-device'?' danger':'')+'" onclick="recoverRotationIssue('+index+')">'+label+'</button>':'')+'</div>';
+  };
+  const list=(Array.isArray(status.candidate_issues)?status.candidate_issues:[]).filter(issue=>issue&&typeof issue==='object');
+  const sameAsMain=issue=>typeof status.issue?.code==='string'&&issue.code===status.issue.code&&issue.account_id===status.issue.account_id;
+  const duplicate=list.find(sameAsMain);
+  const main=duplicate&&!Object.hasOwn(ROTATION_ACTION_LABELS,status.issue.action)?{...status.issue,action:duplicate.action}:status.issue;
+  let html=row(main);
+  const candidates=list.filter(issue=>!sameAsMain(issue)).map(issue=>row(issue,true)).join('');
+  if(candidates) html+='<div class="rotation-candidate-title">候选账号需要处理</div>'+candidates;
+  const el=document.getElementById('rotationIssues'); el.innerHTML=html; el.hidden=!html;
+}
+async function recoverRotationIssue(index){
+  const issue=ROTATION_ISSUES[index];
+  if(!issue||ROTATION_RECOVERING) return;
+  // 仅执行服务端明确给出的恢复动作，不从错误文案猜测设备限制。
+  ROTATION_RECOVERING=true;
+  try{
+    switch(issue.action){
+      case 'add-account': addAccount(); break;
+      case 'update-login': addAccount(issue.account_id||null); break;
+      case 'connect': await launch(); break;
+      case 'accounts':
+        if(ACCOUNTS.length) document.getElementById('grid').scrollIntoView({block:'start'});
+        else addAccount();
+        break;
+      case 'settings': await openRotationSettings(); break;
+      case 'reset-device': await resetDevice(); break;
+      default: return;
+    }
+    await loadRotationStatus();
+  }finally{ ROTATION_RECOVERING=false; }
+}
+function renderRotationStatus(data){
+  const settings=data.settings, status=data.status;
+  const labels={disabled:'未启用',waiting:'等待检查',checking:'检查中',prompting:'等待确认',switching:'切换中',paused:'已暂停',error:'检查异常'};
+  const badge=document.getElementById('rotationBadge');
+  badge.textContent=labels[status.phase]||'状态未知';
+  badge.className='backup-badge'+(['paused','error'].includes(status.phase)?' err':status.phase==='prompting'?' warn':settings.enabled&&status.phase!=='disabled'?' ok':'');
+  const threshold=Number(settings.word_threshold).toLocaleString('zh-CN');
+  document.getElementById('rotationSummary').textContent='每 '+settings.interval_minutes+' 分钟检查一次 · '+threshold+' 词 · '+(settings.mode==='auto'?'自动切换':'提醒确认');
+  const usage=Number.isFinite(status.used_words)?'本周已用 '+status.used_words.toLocaleString('zh-CN')+' 词。':'';
+  document.getElementById('rotationMessage').textContent=usage+(status.message||'后端运行时，关闭网页仍可检查。');
+  document.getElementById('rotationTimes').textContent='上次检查：'+(status.last_check_at?fmtTime(status.last_check_at):'尚未检查')+' · 下次检查：'+(status.next_check_at?fmtTime(status.next_check_at):'未安排');
+  const result=document.getElementById('rotationLastResult');
+  result.textContent=status.last_result?'最近结果：'+status.last_result:''; result.hidden=!status.last_result;
+  const notification=document.getElementById('rotationNotificationError');
+  notification.textContent=status.notification_error?'系统提醒：'+status.notification_error:''; notification.hidden=!status.notification_error;
+  renderRotationIssues(status);
+}
+function loadRotationStatus(){
+  if(ROTATION_LOADING) return ROTATION_LOADING;
+  if(ROTATION_SAVING) return Promise.resolve(ROTATION_DATA);
+  const revision=ROTATION_REVISION;
+  ROTATION_LOADING=(async()=>{
+    try{
+      const r=await api('/api/rotation');
+      if(revision!==ROTATION_REVISION) return ROTATION_DATA;
+      if(r.status!=='OK'||!r.data?.settings||!r.data?.status){
+        document.getElementById('rotationBadge').textContent='状态未更新';
+        document.getElementById('rotationBadge').className='backup-badge warn';
+        document.getElementById('rotationMessage').textContent=r.msg||'未能读取轮动状态，请刷新重试。';
+        return null;
+      }
+      ROTATION_DATA=r.data;
+      renderRotationStatus(ROTATION_DATA);
+      return ROTATION_DATA;
+    }finally{ ROTATION_LOADING=null; }
+  })();
+  return ROTATION_LOADING;
+}
+async function openRotationSettings(){
+  openModal('rotationMask');
+  const save=document.getElementById('rotationSaveBtn'), error=document.getElementById('rotationError');
+  save.disabled=true; error.textContent='正在读取设置…';
+  const data=await loadRotationStatus();
+  if(!data){ error.textContent='无法读取已保存设置，请关闭后重试。'; return; }
+  const s=data.settings;
+  document.getElementById('rotationEnabled').checked=s.enabled;
+  document.getElementById('rotationMode').value=s.mode;
+  document.getElementById('rotationThreshold').value=s.word_threshold;
+  document.getElementById('rotationWarning').value=s.warning_words;
+  document.getElementById('rotationInterval').value=s.interval_minutes;
+  error.textContent=''; save.disabled=ROTATION_SAVING;
+  updateRotationForm();
+}
+function updateRotationForm(){
+  const automatic=document.getElementById('rotationMode').value==='auto';
+  const threshold=Number(document.getElementById('rotationThreshold').value);
+  const warning=Number(document.getElementById('rotationWarning').value);
+  const interval=document.getElementById('rotationInterval').value;
+  document.getElementById('rotationWarningField').hidden=automatic;
+  document.getElementById('rotationWarning').required=!automatic;
+  document.getElementById('rotationWarning').disabled=automatic;
+  document.getElementById('rotationAutoWarning').hidden=!automatic;
+  const valid=Number.isInteger(threshold)&&threshold>0&&Number.isInteger(warning)&&warning>=0&&warning<threshold;
+  document.getElementById('rotationCondition').textContent=automatic
+    ? '检查时达到 '+(threshold>0?threshold.toLocaleString('zh-CN'):'所设')+' 词后直接切换，不再询问。'
+    : (valid?'检查时达到 '+(threshold-warning).toLocaleString('zh-CN')+' 词即弹出 macOS 提示。':'达到提前提醒线时弹出 macOS 提示。')+' 选择「稍后」后，用量重置前不重复提醒；90 秒未操作则保持当前账号，下次检查再提醒。';
+  document.getElementById('rotationCadence').textContent='每 '+interval+' 分钟检查一次，可能超过提醒线或阈值后才检测到。';
+}
+async function saveRotationSettings(){
+  if(ROTATION_SAVING) return;
+  const error=document.getElementById('rotationError');
+  const thresholdRaw=String(document.getElementById('rotationThreshold').value||'').trim();
+  const warningRaw=String(document.getElementById('rotationWarning').value??'').trim();
+  const settings={
+    enabled:Boolean(document.getElementById('rotationEnabled').checked),
+    mode:document.getElementById('rotationMode').value,
+    word_threshold:Number(thresholdRaw), warning_words:Number(warningRaw),
+    interval_minutes:Number(document.getElementById('rotationInterval').value),
+  };
+  if(!thresholdRaw||!Number.isInteger(settings.word_threshold)||settings.word_threshold<1||settings.word_threshold>10000000){ error.textContent='轮动阈值须为 1 至 10,000,000 的整数。'; return; }
+  // 自动模式不使用提前量，缩小阈值时保留一个有效值，避免隐藏字段阻挡保存。
+  if(settings.mode==='auto') settings.warning_words=Math.min(settings.word_threshold-1,Number.isInteger(settings.warning_words)&&settings.warning_words>=0?settings.warning_words:0);
+  if(!Number.isInteger(settings.warning_words)||settings.warning_words<0||settings.warning_words>=settings.word_threshold||(settings.mode==='notify'&&!warningRaw)){ error.textContent='提前提醒词数须为非负整数，且小于轮动阈值。'; return; }
+  if(!['notify','auto'].includes(settings.mode)||![10,15,30].includes(settings.interval_minutes)){ error.textContent='请选择有效的轮动方式和检查间隔。'; return; }
+  ROTATION_SAVING=true; ROTATION_REVISION++;
+  const save=document.getElementById('rotationSaveBtn'); save.disabled=true; error.textContent='';
+  try{
+    const r=await api('/api/rotation',{method:'POST',body:JSON.stringify(settings)});
+    if(r.status!=='OK'||!r.data?.settings||!r.data?.status){ error.textContent=r.msg||'保存失败，请重试。'; return; }
+    ROTATION_DATA=r.data; renderRotationStatus(ROTATION_DATA);
+    closeModal('rotationMask'); toast(settings.enabled?'轮动设置已保存':'后台轮动检查已关闭','ok');
+  }finally{ ROTATION_SAVING=false; save.disabled=false; }
+}
+if(typeof window.addEventListener==='function') window.addEventListener('focus',()=>{ loadRotationStatus(); });
+
 function setConnectionUi(state,label){
   CONNECTION_STATE=state;
   const el=document.getElementById('curLink');
@@ -237,6 +386,7 @@ const SKELETON_HTML=Array.from({length:3},()=>'<div class="skel"><i></i><i></i><
 async function loadAccounts(){
   const g=document.getElementById('grid');
   loadBackupStatus();
+  loadRotationStatus();
   if(ACCOUNTS_LOADED) g.classList.add('refreshing'); else g.innerHTML=SKELETON_HTML;
   const r=await api('/api/accounts');
   g.classList.remove('refreshing');

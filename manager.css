@@ -98,6 +98,31 @@ header .sub { color:var(--mut); font-size:13px; margin-top:6px; display:flex; al
 .backup-sensitive { color:var(--red); font-size:12px; font-weight:500; }
 .backup-actions { display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
 
+/* ===== 账号轮动状态与设置 ===== */
+.rotation-panel { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; padding:12px 0 14px; border-bottom:1px solid var(--line); scroll-margin-top:16px; }
+.rotation-main { min-width:0; flex:1; }
+.rotation-heading { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.rotation-summary, .rotation-message, .rotation-times { color:var(--mut); font-size:12px; }
+.rotation-message { margin-top:6px; overflow-wrap:anywhere; }
+.rotation-times { margin-top:3px; font-variant-numeric:tabular-nums; }
+.rotation-actions { display:flex; flex:none; gap:8px; }
+.rotation-last-result { margin-top:7px; color:var(--ink); font-size:12px; overflow-wrap:anywhere; }
+.rotation-notification-error { margin-top:5px; color:var(--amber); font-size:12px; overflow-wrap:anywhere; }
+.rotation-issues { margin-top:10px; padding-left:10px; border-left:2px solid var(--amber-line); }
+.rotation-issue { display:flex; align-items:flex-start; gap:12px; padding:6px 0; font-size:12px; }
+.rotation-issue-copy { flex:1; min-width:0; overflow-wrap:anywhere; }
+.rotation-issue-copy strong { color:var(--amber); font-weight:500; }
+.rotation-issue-hint, .rotation-candidate-title { margin-top:3px; color:var(--mut); font-size:12px; }
+.rotation-candidate-title { padding-top:7px; }
+.rotation-issue .btn { flex:none; }
+.modal.rotation-modal { width:min(520px,94vw); }
+.rotation-toggle { display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600; }
+.rotation-toggle input { margin:0; accent-color:var(--grn); width:15px; height:15px; }
+.rotation-help { margin:8px 0 14px; font-size:12px; line-height:1.65; color:var(--mut); }
+.rotation-fields { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.rotation-modal input.fld { width:100%; }
+.rotation-caution { margin:8px 0 14px; padding:9px 12px; background:var(--amber-t); color:var(--amber); border-radius:var(--r); font-size:12px; line-height:1.65; }
+
 /* ===== 账号卡片 ===== */
 .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(340px,1fr)); gap:14px; align-items:stretch; transition:opacity var(--t); }
 .grid.refreshing { opacity:.6; pointer-events:none; }
@@ -287,6 +312,7 @@ select.fld:focus { border-color:var(--grn); box-shadow:var(--focus); }
 }
 @media (max-width:520px){
   .wrap { padding:20px 14px 48px; }
+  .rotation-panel { align-items:flex-start; flex-direction:column; gap:10px; }
   .uhero { flex-direction:column; align-items:flex-start; }
   .ustats { grid-template-columns:1fr; }
   .diag-row .dk, #syncRows .diag-row .dk { width:104px; }
