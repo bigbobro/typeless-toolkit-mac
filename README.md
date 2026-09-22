@@ -2,7 +2,7 @@
 
 [![test](https://github.com/bigbobro/typeless-toolkit-mac/actions/workflows/test.yml/badge.svg)](https://github.com/bigbobro/typeless-toolkit-mac/actions/workflows/test.yml)
 
-当前版本：[v2.9.0](https://github.com/bigbobro/typeless-toolkit-mac/releases/tag/macos-v2.9.0)。运行中的工具版本显示在管理器页面标题旁。
+当前版本：[v2.9.1](https://github.com/bigbobro/typeless-toolkit-mac/releases/tag/macos-v2.9.1)。运行中的工具版本显示在管理器页面标题旁。
 
 给 **macOS 上的 Typeless** 用的本机管理器：把多个账号收在一个页面里，切号、对齐词库、处理设备限制、去掉升级/会员弹窗。数据只留在本机，打开浏览器操作，不用注册云端、也不用 `npm install`。
 
@@ -50,18 +50,17 @@ xattr -dr com.apple.quarantine . 2>/dev/null || true
 ./启动管理器.command
 ```
 
-已在运行时再执行，只会打开已有页面。手动等价：
+启动脚本会检查正在运行的管理器版本：同版本直接打开已有页面；版本不同则停止已确认身份的旧进程，等它退出后启动当前目录的版本，确认版本和端口正确后再打开页面。也可在终端运行同一入口：
 
 ```bash
-node manager.js
-open http://127.0.0.1:7788
+node lib/manager-launcher.js
 ```
 
 用完在终端 `Ctrl+C`。
 
-升级时先在运行旧管理器的终端按 `Ctrl+C`，再更新源码（Git 安装用 `git pull --ff-only`，ZIP 安装用新版源码替换旧源码），重新运行 `./启动管理器.command`。刷新页面后，确认标题旁的版本号已更新。
+升级前先完成正在进行的切号、同步或恢复操作，再更新源码（Git 安装用 `git pull --ff-only`；ZIP 安装可解压到新目录或替换旧源码），运行新版目录中的 `./启动管理器.command`。从 2.8.0 / 2.9.0 升级也会自动停止旧进程，无需先找到原来的终端窗口。页面标题旁显示实际运行的版本。
 
-仅关闭网页不会退出管理器；旧进程仍在运行时，启动脚本会复用它。同一台 Mac、同一个 macOS 用户升级时，已保存的账号、快照和主词库仍使用原数据目录。
+仅关闭网页不会退出管理器。启动器只处理同一端口上、已确认属于当前用户的管理器进程；端口被其他程序占用或旧管理器 30 秒内未退出时会报错，不强制结束进程。管理器重启本身不重启 Typeless；同一台 Mac、同一个 macOS 用户升级时，已保存的账号、快照和主词库仍使用原数据目录。
 
 顶部 **「管理连接未开启」不等于账号掉线**。读取额度、词库和个人统计需要保持 Typeless 的管理连接：工具会调用本机官方客户端生成请求校验信息。点「连接 Typeless」后页面会等到连上并重新读取账号统计（若 Typeless 已普通启动，会自动重启一次以打开调试口）。日常刷新不会自行重启应用；连接不可用时会显示操作指引。
 
@@ -269,7 +268,7 @@ codesign --verify --deep --strict /Applications/Typeless.app
 - 只监听回环地址，不开放 CORS  
 - 除公开 `/api/health` 外，`/api/*` 须来自当前管理器页并携带本次启动的会话密钥  
 - 常规账号/抓取接口不把 token 回给浏览器；导出备份包才是明确的出站凭证路径  
-- 启动脚本用 `/api/health` 的产品标识确认端口上跑的是本管理器  
+- 启动脚本用 `/api/health` 检查产品和版本；停止旧进程前还核对端口、进程用户、Node 入口与源码目录，确认新进程就绪后才打开页面
 
 ---
 
@@ -278,6 +277,7 @@ codesign --verify --deep --strict /Applications/Typeless.app
 | 路径 | 作用 |
 | --- | --- |
 | `manager.js` | 管理器后端 |
+| `lib/manager-launcher.js` | Command 启动入口：版本检查、旧进程替换、启动确认与退出清理 |
 | `manager.html` / `manager.css` / `manager-ui.js` | 管理器页面（结构 / 样式 / 脚本） |
 | `lib/common.js` | 账号、快照、API、同步、版本漂移；装配 paths / private-fs / cdp / runtime-backup / paywall-patch 并统一对外转发 |
 | `lib/paths.js` | 路径探测与配置加载（启动时一次算好） |
