@@ -2,7 +2,7 @@
 
 [![test](https://github.com/bigbobro/typeless-toolkit-mac/actions/workflows/test.yml/badge.svg)](https://github.com/bigbobro/typeless-toolkit-mac/actions/workflows/test.yml)
 
-当前版本：[v2.8.0](https://github.com/bigbobro/typeless-toolkit-mac/releases/tag/macos-v2.8.0)。运行中的工具版本显示在管理器页面标题旁。
+当前版本：[v2.9.0](https://github.com/bigbobro/typeless-toolkit-mac/releases/tag/macos-v2.9.0)。运行中的工具版本显示在管理器页面标题旁。
 
 给 **macOS 上的 Typeless** 用的本机管理器：把多个账号收在一个页面里，切号、对齐词库、处理设备限制、去掉升级/会员弹窗。数据只留在本机，打开浏览器操作，不用注册云端、也不用 `npm install`。
 
