@@ -40,6 +40,7 @@ function manager(options = {}) {
     CODE_DIR: path.join(__dirname, '..'), ROOT: dataDir, config: { manager_port: 7788 },
     readAccounts: () => accounts,
     readCurrentLogin: () => ({ user_id: activeId }),
+    ensureApp: async () => options.ensureApp ? options.ensureApp() : { state: 'connected' },
     readActiveAccountId: async () => options.readActiveAccountId ? options.readActiveAccountId(activeId) : activeId,
     readAccountUsage: async account => {
       calls.push(['usage', account.user_id]);
@@ -161,6 +162,49 @@ test('轮动 API 默认关闭且不访问账号服务，设置持久化且返回
   assert.deepEqual(loaded.body.data.settings, saved.body.data.settings);
   assert.equal(restarted.timers.size, 1);
   assert.deepEqual(restarted.calls, []);
+});
+
+test('断连后通过连接入口恢复，状态等待复查且成功检查替换旧失败结果', async () => {
+  let connected = true;
+  const m = manager({
+    usage: { a: { week_word_usage_value: 186 } },
+    readActiveAccountId: async id => {
+      if (!connected) throw Object.assign(new Error('offline'), { code: 'CONNECTION_REQUIRED' });
+      return id;
+    },
+    ensureApp: async () => { connected = true; return { state: 'connected' }; },
+  });
+  await m.enable('notify');
+  await m.engine.check();
+  connected = false;
+  await m.engine.check();
+  assert.equal(m.engine.view().status.phase, 'error');
+  assert.match(m.engine.view().status.last_result, /管理连接不可用/);
+
+  const reconnected = await m.run('POST', '/api/launch');
+  assert.equal(reconnected.status, 200);
+  const pending = (await m.run('GET', '/api/rotation')).body.data.status;
+  assert.equal(pending.phase, 'waiting');
+  assert.equal(pending.issue, null);
+  assert.match(pending.message, /等待重新检查/);
+  assert.equal(m.timers.size, 1);
+  assert.equal([...m.timers.values()][0].delay, 15 * 60000);
+  assert.equal(m.calls.filter(([name]) => name === 'usage').length, 1, '读取状态不立即检查用量');
+
+  const [timerId, timer] = [...m.timers][0];
+  m.timers.delete(timerId);
+  timer.callback();
+  await new Promise(resolve => setImmediate(resolve));
+  const recovered = (await m.run('GET', '/api/rotation')).body.data.status;
+  assert.equal(recovered.phase, 'waiting');
+  assert.equal(recovered.used_words, 186);
+  assert.equal(recovered.issue, null);
+  assert.match(recovered.last_result, /本次检查成功/);
+  assert.doesNotMatch(recovered.last_result, /管理连接不可用/);
+  assert.equal(m.saved().last_result, recovered.last_result);
+  assert.equal(m.calls.filter(([name]) => name === 'usage').length, 2);
+  assert.equal(m.calls.some(([name]) => ['confirm', 'stop', 'restore'].includes(name)), false);
+  assert.equal(m.timers.size, 1);
 });
 
 test('无效设置及存储错误返回失败，并保留已生效设置和唯一计时器', async () => {

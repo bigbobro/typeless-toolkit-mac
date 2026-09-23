@@ -73,6 +73,10 @@ test('默认禁用不创建 timer，也不读取账号用量', async () => {
   assert.equal(h.timers.size, 0);
   assert.equal(h.calls.usage.length, 0);
   assert.equal(h.calls.saves.length, 0);
+  h.rotation.invalidate();
+  assert.equal(h.rotation.view().status.phase, 'disabled');
+  assert.equal(h.rotation.view().status.message, '账号轮动未开启');
+  assert.equal(h.timers.size, 0);
 });
 
 test('启用立即检查，之后每 15 分钟一个 timer；重复启停不累积任务', async () => {
@@ -167,6 +171,32 @@ test('网络失败或无效用量不切号，保留下一次检查并能恢复',
     h.state.readUsage = async () => ({ week_word_usage_value: 2000 });
     await h.tick();
     assert.equal(h.calls.rotations.length, 1);
+  }
+});
+
+test('连接自行恢复或加载旧版残留结果，成功检查后不再显示旧错误', async () => {
+  for (const fromSaved of [false, true]) {
+    const h = harness({ usage: 186, saved: fromSaved ? {
+      version: 1, settings: settings(), paused: false, issue: null,
+      last_result: '本次未切换。Typeless 管理连接不可用，请连接 Typeless 后重试。',
+    } : null });
+    if (fromSaved) {
+      h.rotation.start();
+    } else {
+      h.state.readUsage = async () => { throw Object.assign(new Error('offline'), { code: 'CONNECTION_REQUIRED' }); };
+      await h.enable();
+      assert.equal(h.rotation.view().status.phase, 'error');
+      h.state.readUsage = async () => ({ week_word_usage_value: 186 });
+    }
+    await h.tick();
+    const status = h.rotation.view().status;
+    assert.equal(status.issue, null);
+    assert.equal(status.phase, 'waiting');
+    assert.match(status.last_result, /本次检查成功/);
+    assert.doesNotMatch(status.last_result, /管理连接不可用/);
+    assert.equal(h.persisted.last_result, status.last_result);
+    assert.equal(h.calls.rotations.length, 0);
+    assert.equal(h.calls.confirmations.length, 0);
   }
 });
 
@@ -440,18 +470,25 @@ test('暂停后的引导超时只安排通知重试，不读取用量或重复�
   assert.equal(h.persisted.pending_notice, null);
 });
 
-test('发送成功通知失败时，下轮重发结果通知并保留真实成功，不重放切号', async () => {
+test('未送达的切号结果持续保留，通知送达后才允许新检查更新结果，不重放切号', async () => {
   const h = harness({ usage: 2000 });
   h.state.notify = async () => { throw new Error('notification denied'); };
   await h.enable({ mode: 'auto' });
   assert.equal(h.persisted.pending_notice.kind, 'success');
   assert.match(h.rotation.view().status.notification_error, /发送失败/);
-  h.state.notify = async () => {}; h.state.usage = 0;
+  h.state.usage = 0;
   await h.tick();
-  assert.equal(h.calls.notifications.length, 2);
+  assert.match(h.rotation.view().status.last_result, /已切换到 Account B/);
+  assert.equal(h.persisted.pending_notice.kind, 'success');
+  h.state.notify = async () => {};
+  await h.tick();
+  assert.equal(h.calls.notifications.length, 3);
+  assert.deepEqual(h.calls.notifications[2], h.calls.notifications[0]);
+  assert.match(h.calls.notifications[2].message, /已切换到 Account B/);
   assert.equal(h.calls.rotations.length, 1);
   assert.equal(h.rotation.view().status.notification_error, null);
-  assert.match(h.rotation.view().status.last_result, /已切换到 Account B/);
+  assert.equal(h.persisted.pending_notice, null);
+  assert.match(h.rotation.view().status.last_result, /本次检查成功.*本次未切换/);
 });
 
 test('旧异常引导迟到的结果不能覆盖新配置，也不会留下额外 timer', async () => {
@@ -494,6 +531,8 @@ test('暂停期间人工操作不会清除尚未送达的恢复引导，重启�
   h.state.guide = async () => { throw new Error('osascript temporarily unavailable'); };
   await h.enable({ mode: 'auto' });
   h.rotation.invalidate();
+  assert.equal(h.rotation.view().status.phase, 'paused');
+  assert.match(h.rotation.view().status.message, /已恢复切换前/);
   assert.equal(h.persisted.issue.code, 'SWITCH_ROLLED_BACK');
   assert.equal(h.persisted.pending_notice.kind, 'issue');
   h.rotation.stop();
