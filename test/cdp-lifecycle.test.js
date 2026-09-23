@@ -8,7 +8,7 @@ const vm = require('node:vm');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'lib/cdp.js'), 'utf8');
 
-function harness({ connect = 'open', response = 'success', expires, wsPackage = false } = {}) {
+function harness({ connect = 'open', response = 'success', expires, wsPackage = false, floatingBar = false } = {}) {
   const timers = new Map(), sockets = [];
   let nextTimer = 0;
   const schedule = (fn, ms) => {
@@ -59,7 +59,8 @@ function harness({ connect = 'open', response = 'success', expires, wsPackage = 
     module: mod, require: name => name === 'ws' ? Socket : require(name),
     URL, AbortSignal, setTimeout: schedule, clearTimeout: id => timers.delete(id),
     fetch: async () => ({ ok: true, json: async () => [{
-      title: 'Typeless', type: 'page', url: 'file:///test/app.asar/dist/renderer/hub.html',
+      title: floatingBar ? 'Status' : 'Typeless', type: 'page',
+      url: 'file:///test/app.asar/dist/renderer/' + (floatingBar ? 'floating-bar.html' : 'hub.html'),
       webSocketDebuggerUrl: 'ws://127.0.0.1:9333/devtools/page/test',
     }] }),
   });
@@ -87,6 +88,12 @@ test('CDP 成功返回及业务异常都关闭连接并清理监听和 timer', a
     await assert.rejects(h.withCDP(async () => { throw new Error('callback failed'); }), /callback failed/);
     await h.assertReleased();
   }
+});
+
+test('仅剩浮条时仍可执行 CDP 请求，结束后不遗留连接或定时器', async () => {
+  const h = harness({ floatingBar: true });
+  assert.equal(await h.withCDP((_send, ev) => ev('1 + 1')), 42);
+  await h.assertReleased();
 });
 
 test('CDP 建连失败、提前关闭和建连超时也走统一清理', async () => {

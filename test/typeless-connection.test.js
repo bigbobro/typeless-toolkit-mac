@@ -6,6 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { pathToFileURL } = require('url');
+const { createCdp } = require('../lib/cdp');
 
 const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'tt-connection-'));
 process.env.TYPELESS_DATA_DIR = DATA_DIR;
@@ -74,6 +75,78 @@ test('Typeless 登录页仍是可连接的管理窗口', () => {
   };
   assert.strictEqual(selectTypelessCdpTarget([target], { asarPath }), target);
   assert.strictEqual(selectTypelessCdpTarget([{ ...target, url: 'https://typeless.com/login' }], { asarPath }), null);
+});
+
+test('关闭主窗口后通过官方浮条保持连接，主窗口和登录页优先于浮条', async () => {
+  const asarPath = '/Applications/Typeless.app/Contents/Resources/app.asar';
+  const root = pathToFileURL(asarPath).href + '/dist/renderer/';
+  const floating = {
+    type: 'page', title: 'Status', url: root + 'floating-bar.html',
+    webSocketDebuggerUrl: `ws://127.0.0.1:${CDP_PORT}/devtools/page/floating-bar`,
+  };
+  const cdp = createCdp({ cdpPort: CDP_PORT, asarPath });
+  for (const [title, page] of [['Typeless', 'hub.html'], ['Typeless Login', 'login.html']]) {
+    const main = { ...floating, title, url: root + page };
+    assert.strictEqual(cdp.selectTypelessCdpTarget([floating, main]), main);
+    assert.strictEqual(cdp.selectTypelessCdpTarget([main, floating]), main);
+  }
+  const fetchFn = async url => ({ ok: true, json: async () => url.endsWith('/json/version')
+    ? { 'User-Agent': 'Typeless/2.8.0' } : [floating] });
+  assert.strictEqual(cdp.selectTypelessCdpTarget([floating]), floating);
+  assert.strictEqual((await cdp.probeCdpPort(CDP_PORT, fetchFn)).status, 'ready');
+  assert.strictEqual((await cdp.typelessConnectionStatus({
+    portUp: () => cdp.portUp(CDP_PORT, fetchFn),
+  })).state, 'connected');
+  const connected = await cdp.ensureApp({
+    probePort: () => cdp.probeCdpPort(CDP_PORT, fetchFn),
+    killTypeless: () => assert.fail('浮条可用时不得关闭 Typeless'),
+    launchTypeless: () => assert.fail('浮条可用时不得启动 Typeless'),
+  });
+  assert.strictEqual(connected.restarted, false);
+});
+
+test('浮条后备目标仍拒绝其它页面、来源和调试端口', () => {
+  const asarPath = '/Applications/Typeless.app/Contents/Resources/app.asar';
+  const target = {
+    type: 'page', title: 'Status',
+    url: pathToFileURL(asarPath).href + '/dist/renderer/floating-bar.html',
+    webSocketDebuggerUrl: `ws://127.0.0.1:${CDP_PORT}/devtools/page/floating-bar`,
+  };
+  for (const change of [
+    { type: 'worker' }, { title: 'Other' },
+    { url: target.url.replace('floating-bar.html', 'other.html') },
+    { url: target.url.replace('app.asar/', 'other.asar/') },
+    { url: 'https://typeless.com/floating-bar.html' },
+    { webSocketDebuggerUrl: 'ws://evil.example/devtools/page/floating-bar' },
+    { webSocketDebuggerUrl: `ws://127.0.0.1:${CDP_PORT + 1}/devtools/page/floating-bar` },
+    { webSocketDebuggerUrl: 'invalid' },
+  ]) {
+    assert.strictEqual(selectTypelessCdpTarget([{ ...target, ...change }], { asarPath }), null);
+  }
+});
+
+test('管理端口正常但页面未就绪时只等待，不重启 Typeless', async () => {
+  let probes = 0;
+  const result = await ensureApp({
+    probePort: async () => ({ status: ++probes >= 3 ? 'ready' : 'no-target' }),
+    killTypeless: () => assert.fail('等待页面时不得关闭 Typeless'),
+    launchTypeless: () => assert.fail('等待页面时不得启动 Typeless'),
+    sleep: async () => {}, attempts: 3,
+  });
+  assert.strictEqual(result.restarted, false);
+  assert.strictEqual(result.cdp_reachable, true);
+  assert.strictEqual(probes, 3);
+});
+
+test('页面一直不可用时有限等待后明确报错，不重启或误报端口未开启', async () => {
+  let probes = 0;
+  await assert.rejects(ensureApp({
+    probePort: async () => { probes++; return { status: 'no-target' }; },
+    killTypeless: () => assert.fail('页面缺失时不得关闭 Typeless'),
+    launchTypeless: () => assert.fail('页面缺失时不得启动 Typeless'),
+    sleep: async () => {}, attempts: 2,
+  }), error => error.code === 'CDP_TARGET_UNAVAILABLE' && /管理页面未就绪/.test(error.message));
+  assert.strictEqual(probes, 3);
 });
 
 test('管理端口已连接时不重启 Typeless', async () => {

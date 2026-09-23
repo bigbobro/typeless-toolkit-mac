@@ -2,7 +2,7 @@
 
 [![test](https://github.com/bigbobro/typeless-toolkit-mac/actions/workflows/test.yml/badge.svg)](https://github.com/bigbobro/typeless-toolkit-mac/actions/workflows/test.yml)
 
-当前版本：[v2.9.2](https://github.com/bigbobro/typeless-toolkit-mac/releases/tag/macos-v2.9.2)。运行中的工具版本显示在管理器页面标题旁。
+当前版本：[v2.9.3](https://github.com/bigbobro/typeless-toolkit-mac/releases/tag/macos-v2.9.3)。运行中的工具版本显示在管理器页面标题旁。
 
 给 **macOS 上的 Typeless** 用的本机管理器：把多个账号收在一个页面里，切号、对齐词库、处理设备限制、去掉升级/会员弹窗。数据只留在本机，打开浏览器操作，不用注册云端、也不用 `npm install`。
 
@@ -63,6 +63,8 @@ node lib/manager-launcher.js
 仅关闭网页不会退出管理器。启动器只处理同一端口上、已确认属于当前用户的管理器进程；端口被其他程序占用或旧管理器 30 秒内未退出时会报错，不强制结束进程。管理器重启本身不重启 Typeless；同一台 Mac、同一个 macOS 用户升级时，已保存的账号、快照和主词库仍使用原数据目录。
 
 顶部 **「管理连接未开启」不等于账号掉线**。读取额度、词库和个人统计需要保持 Typeless 的管理连接：工具会调用本机官方客户端生成请求校验信息。点「连接 Typeless」后页面会等到连上并重新读取账号统计（若 Typeless 已普通启动，会自动重启一次以打开调试口）。日常刷新不会自行重启应用；连接不可用时会显示操作指引。
+
+连接后可以关闭 Typeless 主窗口，工具会通过客户端已有的常驻浮条继续读取账号和用量。若调试端口正常但管理页面尚未就绪，连接操作只有限等待，超时提示打开主窗口后重试，不会因此重启 Typeless。
 
 单独拉起带调试口的 Typeless 可用：`启动Typeless(带调试端口).command`。
 
