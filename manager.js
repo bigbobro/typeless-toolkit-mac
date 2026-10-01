@@ -12,6 +12,7 @@ const path = require('path');
 const crypto = require('crypto');
 
 const C = require('./lib/common');
+const { createDiagnosticLog } = require('./lib/diagnostic-log');
 const { createAccountRotation, createRotationStore } = require('./lib/account-rotation');
 const { createRotationNotifier } = require('./lib/rotation-notifier');
 const { makeRotationIssue, issueForError } = require('./lib/rotation-issues');
@@ -43,6 +44,7 @@ const {
 const PORT = config.manager_port;
 // 版本号唯一来源:package.json。发版只改那里(以及 CHANGELOG 和 git tag)。
 const VERSION = JSON.parse(fs.readFileSync(path.join(C.CODE_DIR, 'package.json'), 'utf8')).version;
+const diagnostics = createDiagnosticLog({ dir: path.join(C.ROOT, 'logs'), version: VERSION });
 const security = createLocalApiSecurity({ port: PORT });
 const pendingCaptures = new Map();
 const CAPTURE_TTL_MS = 2 * 60 * 1000;
@@ -56,6 +58,7 @@ const STATIC_ASSETS = Object.freeze({
 
 // ---------- HTTP ----------
 function send(res, code, obj) {
+  diagnostics.finish(code, obj);
   applySecurityHeaders(res);
   res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(obj));
@@ -108,15 +111,39 @@ function publicAccount(account, extra = {}) {
   ]) {
     if (Object.hasOwn(extra, key)) view[key] = extra[key];
   }
+  if (extra.login_check) {
+    const check = extra.login_check;
+    view.login_check = {
+      checked_at: check.checked_at,
+      http_status: Number.isInteger(check.http_status) && check.http_status >= 100 && check.http_status <= 599 ? check.http_status : null,
+      api_code: Number.isSafeInteger(check.api_code) ? check.api_code : null,
+    };
+  }
+  if (/^[a-f0-9]{16}$/.test(extra.diagnostic_ref || '')) view.diagnostic_ref = extra.diagnostic_ref;
   return view;
 }
 
-async function checkAccountLogin(account) {
+async function inspectAccountLogin(account) {
+  const started = Date.now();
+  let result;
   try {
-    const result = await curlApi('POST', '/oauth/refresh_access_token', account.token, { app: 'typeless_webapp' });
-    if (result?.code === 402) return 'expired';
-    return typeof result?.access_token === 'string' && result.access_token ? 'valid' : 'unknown';
-  } catch (_) { return 'unknown'; }
+    result = await curlApi('POST', '/oauth/refresh_access_token', account.token, { app: 'typeless_webapp' });
+  } catch (_) {}
+  const check = {
+    status: result?.code === 402 ? 'expired'
+      : typeof result?.access_token === 'string' && result.access_token ? 'valid' : 'unknown',
+    checked_at: new Date().toISOString(),
+    http_status: result?._http_status ?? null,
+    api_code: result?.code ?? null,
+  };
+  diagnostics.record('login_check', { account_id: account.user_id, credential: account.token,
+    outcome: check.status, http_status: check.http_status, api_code: check.api_code,
+    duration_ms: Date.now() - started });
+  return check;
+}
+
+async function checkAccountLogin(account) {
+  return (await inspectAccountLogin(account)).status;
 }
 
 // 人工切号与后台轮动共用同一事务，调用方统一持有 mutationBusy。
@@ -325,7 +352,7 @@ function takePendingCapture(id, consume = false) {
   return item.capture;
 }
 
-const server = http.createServer(async (req, res) => {
+const server = http.createServer((req, res) => diagnostics.withRequest(async () => {
   let ownsMutation = false;
   try {
     let u;
@@ -358,6 +385,17 @@ const server = http.createServer(async (req, res) => {
       return res.end(fs.readFileSync(path.join(C.CODE_DIR, p.slice(1)), 'utf8'));
     }
     if (p.startsWith('/api/')) security.assertApiRequest(req);
+    const operation = ({
+      'GET /api/accounts': 'refresh_accounts', 'POST /api/login/start': 'browser_login',
+      'POST /api/capture': 'capture', 'POST /api/accounts': 'save_account',
+      'POST /api/reset-device': 'reset_device', 'POST /api/launch': 'connect',
+      'POST /api/backup-restore': 'restore_backup', 'POST /api/rotation': 'rotation_settings',
+    })[m + ' ' + p] || (m === 'DELETE' && /^\/api\/accounts\/[^/]+$/.test(p) ? 'remove_account'
+      : m === 'POST' && /^\/api\/accounts\/[^/]+\/switch$/.test(p) ? 'switch_account' : null);
+    if (operation) diagnostics.begin(operation);
+    if (m === 'GET' && p === '/api/diagnostic-log') {
+      return send(res, 200, { status: 'OK', data: diagnostics.exportLog() });
+    }
     if (p.startsWith('/api/') && (m !== 'GET' || p === '/api/backup-export')) {
       if (mutationBusy) throw new LocalApiError(409, 'OPERATION_BUSY', '正在处理其他操作，请完成后重试');
       mutationBusy = true; ownsMutation = true;
@@ -375,14 +413,16 @@ const server = http.createServer(async (req, res) => {
     if (m === 'GET' && p === '/api/accounts') {
       const accs = readAccounts();
       const data = await Promise.all(accs.map(async a => {
-        const [live, loginStatus] = await Promise.all([
+        const [live, loginCheck] = await Promise.all([
           liveStatus(a).catch(e => ({ token_valid: false, _err: e.message })),
-          checkAccountLogin(a),
+          inspectAccountLogin(a),
         ]);
         const has = hasSnapshot(a.user_id);   // 每个账号只探一次,下面复用
         return publicAccount(a, {
           live: publicLiveStatus(live),
-          login_status: loginStatus,
+          login_status: loginCheck.status,
+          login_check: loginCheck,
+          diagnostic_ref: diagnostics.accountRef(a.user_id),
           has_snapshot: has,
           snapshot_mtime: has ? snapshotMtime(a.user_id) : null,
           ...tokenExpiryInfo(a.token),
@@ -436,7 +476,11 @@ const server = http.createServer(async (req, res) => {
       // 从磁盘读,不 Page.reload —— 注册向导每 4 秒轮询这条路由,此前每轮都会把用户
       // 正在填的 Typeless 注册页刷掉。需要 token 的是 /api/capture,不是这里。
       const login = readCurrentLogin();
-      if (login) return send(res, 200, { status: 'OK', data: publicCapture(login) });
+      if (login) {
+        diagnostics.record('current_detected', { account_id: login.user_id, has_current: true });
+        return send(res, 200, { status: 'OK', data: publicCapture(login) });
+      }
+      diagnostics.record('current_detected', { has_current: false });
       return send(res, 200, {
         status: 'FAIL',
         code: 'CURRENT_ACCOUNT_UNAVAILABLE',
@@ -448,9 +492,11 @@ const server = http.createServer(async (req, res) => {
     if (m === 'POST' && p === '/api/login/start') {
       const body = await readObjectBody(req);
       const targetId = body.expected_user_id || null;
+      diagnostics.record('login_target', { account_id: targetId });
       if (targetId) requireAccount(assertSafeAccountId(targetId));
       await ensureApp();
       await startAppLogin(current => {
+        diagnostics.record('login_current', { account_id: current?.user_id, credential: current?.refresh_token, has_current: Boolean(current) });
         if (!current) return;
         // 用户正在修复这个账号自身时，允许重新获取已失效/尚未保存的会话。
         if (targetId && current.user_id === targetId) return;
@@ -467,6 +513,7 @@ const server = http.createServer(async (req, res) => {
         const c = await captureTokenCDP();
         if (!c.user_id || !c.token) throw new Error('抓取结果缺少账号标识或 token');
         const captureId = putPendingCapture(c);
+        diagnostics.record('captured', { account_id: c.user_id, credential: c.token });
         return send(res, 200, { status: 'OK', data: publicCapture(c, captureId) });
       }
       catch (e) { return send(res, 500, { status: 'FAIL', msg: e.message }); }
@@ -511,6 +558,7 @@ const server = http.createServer(async (req, res) => {
       };
       if (idx >= 0) accs[idx] = rec; else accs.push(rec);
       saveAccountWithSnapshot(accs, captured.user_id);
+      diagnostics.record('saved', { account_id: captured.user_id, credential: captured.token, updated_existing: idx >= 0, account_count: accs.length });
       takePendingCapture(b.capture_id, true);
       return send(res, 200, { status: 'OK', data: publicAccount(rec) });
     }
@@ -548,6 +596,7 @@ const server = http.createServer(async (req, res) => {
       let writable = false; try { fs.accessSync(C.ROOT, fs.constants.W_OK); writable = true; } catch (e) {}
       let accCount = 0; try { accCount = readAccounts().length; } catch (e) {}
       const data = {
+        logging: diagnostics.status(),
         typeless: {
           app_path: C.MAC_APP_PATH || '', app_found: ex(C.MAC_APP_PATH),
           bin_path: C.TYPELESS_BIN || '', bin_found: ex(C.TYPELESS_BIN),
@@ -617,6 +666,7 @@ const server = http.createServer(async (req, res) => {
       let accs = readAccounts();
       accs = accs.filter(x => x.user_id !== id);
       writeAccounts(accs);
+      diagnostics.record('removed', { account_id: id, account_count: accs.length });
       return send(res, 200, { status: 'OK' });
     }
     // 单账号词库
@@ -716,7 +766,7 @@ const server = http.createServer(async (req, res) => {
   } finally {
     if (ownsMutation) mutationBusy = false;
   }
-});
+}));
 
 server.on('error', (e) => {
   if (e.code === 'EADDRINUSE') {
@@ -733,6 +783,7 @@ server.on('clientError', (_error, socket) => {
 
 function startServer() {
   server.listen(PORT, '127.0.0.1', () => {
+    diagnostics.record('manager_started');
     getRotation().start();
     log('[mgr] 管理器运行于 http://127.0.0.1:' + PORT);
   });

@@ -89,6 +89,7 @@ test('真实 manager 只接受页面注入的本机会话,无 CORS,坏 JSON 不�
   const denied = await fetch(`${origin}/api/backup-status`);
   assert.strictEqual(denied.status, 401);
   assert.strictEqual(denied.headers.get('access-control-allow-origin'), null);
+  assert.strictEqual((await fetch(`${origin}/api/diagnostic-log`)).status, 401);
 
   const page = await fetch(`${origin}/`);
   assert.strictEqual(page.status, 200);
@@ -97,6 +98,12 @@ test('真实 manager 只接受页面注入的本机会话,无 CORS,坏 JSON 不�
   const match = html.match(/const SESSION_SECRET = ("[A-Za-z0-9_-]+");/);
   assert.ok(match, '页面应包含本次启动的 session secret');
   const secret = JSON.parse(match[1]);
+  const logExport = await fetch(`${origin}/api/diagnostic-log`, { headers: { 'x-typeless-session': secret } });
+  assert.strictEqual(logExport.status, 200);
+  const exported = await logExport.json();
+  assert.strictEqual(exported.data.format, 'typeless-toolkit-diagnostics-v1');
+  assert.strictEqual(exported.data.events[0].event, 'manager_started');
+  assert.ok(!JSON.stringify(exported).includes(secret));
   assert.match(html, /id="launchBtn"[^>]*>⏻ 连接 Typeless<\/button>/);
   assert.match(html, /<link rel="stylesheet" href="\/manager\.css">/);
   assert.match(html, /<script src="\/manager-ui\.js"><\/script>/);

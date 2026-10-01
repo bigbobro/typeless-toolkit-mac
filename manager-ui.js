@@ -766,8 +766,8 @@ function addAccount(id=null){
   openModal('addMask');
   document.getElementById('addTitle').textContent=account?'重新登录账号':'添加新账号';
   document.getElementById('addIntro').textContent=account
-    ? '点「打开浏览器登录」，登录「'+(account.email||account.nickname)+'」并返回 Typeless，再读取并保存以更新原账号。不要在 Typeless 点「退出登录」，这会撤销当前账号的已保存凭证。'
-    : '点「打开浏览器登录」登录新账号，返回 Typeless 后读取并保存。若 Typeless 已登录要添加的账号，可直接读取。登录其他账号前，请先保存当前会话；不要在 Typeless 点「退出登录」，这会撤销当前账号的已保存凭证。';
+    ? '点「打开浏览器登录」，登录「'+(account.email||account.nickname)+'」并返回 Typeless，再读取并保存以更新原账号。网页账号不符时先停止本次登录；不要通过网页或 Typeless 的「退出登录」换号，退出会请求服务器撤销凭证。'
+    : '点「打开浏览器登录」登录新账号，返回 Typeless 后读取并保存。若 Typeless 已登录要添加的账号，可直接读取。登录其他账号前，请先保存当前会话。网页账号不符时先停止本次登录；不要通过网页或 Typeless 的「退出登录」换号，退出会请求服务器撤销凭证。';
   document.getElementById('addRegEntry').style.display=account?'none':'block';
   document.getElementById('addError').textContent='';
   document.getElementById('addLoginStatus').textContent='';
@@ -966,6 +966,24 @@ async function saveMaster(){
 }
 
 function openDiag(){ openModal('diagMask'); renderDiag(); }
+async function exportDiagnosticLog(){
+  const btn=document.getElementById('btnExportDiagnosticLog');
+  if(btn.disabled) return;
+  btn.disabled=true;
+  try{
+    const r=await api('/api/diagnostic-log');
+    if(r.status!=='OK') throw new Error(r.msg||'日志读取失败');
+    const url=URL.createObjectURL(new Blob([JSON.stringify(r.data,null,2)+'\n'],{type:'application/json;charset=utf-8'}));
+    const a=document.createElement('a');
+    try{
+      a.href=url; a.download='Typeless排查日志-'+new Date().toISOString().replace(/[:.]/g,'-')+'.json';
+      document.body.appendChild(a); a.click();
+    }finally{ a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1000); }
+    const incomplete=!r.data.logging?.available||!r.data.logging?.complete||r.data.logging?.dropped_events>0;
+    toast(incomplete?'日志已导出，但部分记录缺失；请一并说明当时的报错。':'排查日志已导出，可将下载的 JSON 文件发给维护者。',incomplete?'err':'ok');
+  }catch(e){ toast('日志导出失败：'+e.message,'err'); }
+  finally{ btn.disabled=false; }
+}
 function diagRow(dot,k,v,vcls){ return `<div class="diag-row"><span class="ddot ${dot}"></span><span class="dk">${k}</span><span class="dv ${vcls||''}">${v}</span></div>`; }
 function paywallRowHtml(pw){
   const reverted = pw.exists && pw.has_backup && !pw.patched;
@@ -997,6 +1015,20 @@ async function renderDiag(){
       diagRow(d.data.writable?'ok':'bad','数据目录', `${esc(d.data.dir)}${d.data.writable?'':' <span class="bad">（不可写！）</span>'}`, d.data.writable?'mut':''),
       diagRow('ok','数据迁移', esc(d.data.migration?.status||'ready'), 'mut'),
       diagRow('neutral','已收录账号', `<b>${d.data.accounts_count}</b> 个`, ''),
+      diagRow(d.logging?.available?'ok':'warn','排查日志',d.logging?.available
+        ? '正在本机记录；可导出后发给维护者。'+(d.logging.dropped_events?'部分记录写入失败。':'')
+        : '日志未能写入，请保留报错截图。',''),
+      diagRow('neutral','登录校验来源','以下为最近一次「全部刷新」的结果；诊断不会重新校验账号。','mut'),
+      ...ACCOUNTS.map((account,index)=>{
+        const check=account.login_check;
+        const label=account.login_status==='valid'?'登录凭证有效':account.login_status==='expired'?'登录已失效':'登录状态未确认';
+        const detail=check
+          ? label+' · HTTP '+(Number.isInteger(check.http_status)?check.http_status:'未取得')
+            +' · 业务码 '+(Number.isSafeInteger(check.api_code)?check.api_code:'未返回')
+            +' · '+fmtTime(check.checked_at)
+          : '尚未检查，请先点「全部刷新」';
+        return diagRow(check?(account.login_status==='valid'?'ok':'warn'):'neutral','账号 '+(index+1)+' 登录校验',esc(detail)+(account.diagnostic_ref?'<br>日志标识 '+esc(account.diagnostic_ref):''),'');
+      }),
       diagRow(bk.backed_up?'ok':'warn','运行数据备份', bk.backed_up?'已备份':'有变更，建议「立即备份」', bk.backed_up?'mut':'warn'),
       '<div id="diagPaywall">'+diagRow('neutral','去弹窗补丁','正在读取 app.asar…','mut')+'</div>',
     ].join('');

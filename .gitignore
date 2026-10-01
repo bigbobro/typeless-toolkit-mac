@@ -21,6 +21,6 @@ node_modules/
 dist/
 
 # 备份与日志
+logs/
 *.log
 .DS_Store
-

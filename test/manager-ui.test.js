@@ -44,6 +44,25 @@ function captureDownloads(ui) {
   return { blobs, downloads, revoked };
 }
 
+test('诊断日志一键下载 JSON，导出失败不生成文件，不额外刷新账号', async () => {
+  const requests = [];
+  const data = { logging: { available: true, complete: true, dropped_events: 0 }, events: [{ event: 'saved' }] };
+  const { ui, element } = loadUi(url => { requests.push(url); return { status: 'OK', data }; });
+  const captured = captureDownloads(ui);
+  await ui.exportDiagnosticLog();
+  assert.deepEqual(requests, ['/api/diagnostic-log']);
+  assert.equal(captured.downloads.length, 1);
+  assert.match(captured.downloads[0].filename, /^Typeless排查日志-.*\.json$/);
+  assert.deepEqual(JSON.parse(await captured.blobs[0].text()), data);
+  assert.equal(element('btnExportDiagnosticLog').disabled, false);
+  assert.deepEqual(captured.revoked, ['blob:test-download']);
+  const failed = loadUi(() => ({ status: 'FAIL', msg: '日志读取失败' }));
+  const noDownload = captureDownloads(failed.ui);
+  await failed.ui.exportDiagnosticLog();
+  assert.equal(noDownload.downloads.length, 0);
+  assert.equal(failed.element('btnExportDiagnosticLog').disabled, false);
+});
+
 test('导出已保存主词库为无表头单列 CSV,保留中文、逗号、引号和换行', async () => {
   const requests = [];
   const { ui, element } = loadUi((url, options) => {
@@ -210,6 +229,27 @@ test('诊断请求断开后显示原因,下一次检查仍会发出请求', asyn
   await assert.doesNotReject(ui.renderDiag());
   assert.equal(calls, 2);
   assert.match(element('diagBody').innerHTML, /服务暂不可用/);
+});
+
+test('诊断展示最近一次登录校验的时间和两种错误码，不输出凭证或额外刷新账号', async () => {
+  const calls = [];
+  const { ui, element } = loadUi(url => {
+    calls.push(url);
+    return { status: 'OK', data: url === '/api/diagnostics'
+      ? { typeless: {}, cdp: { port: 9222 }, data: { backup: {}, accounts_count: 2 } } : {} };
+  });
+  vm.runInContext(`ACCOUNTS=[{
+    user_id:'a', token:'synthetic-private-token', login_status:'expired',
+    login_check:{http_status:401,api_code:402,checked_at:'2026-10-01T16:23:36.000Z'}
+  }, {user_id:'b',login_status:'unknown'}];`, ui);
+  await ui.renderDiag();
+  const html = element('diagBody').innerHTML;
+  assert.match(html, /账号 1 登录校验/);
+  assert.match(html, /登录已失效.*HTTP 401.*业务码 402/);
+  assert.match(html, /账号 2 登录校验.*尚未检查/);
+  assert.match(html, /全部刷新/);
+  assert.doesNotMatch(html, /synthetic-private-token|undefined/);
+  assert.deepEqual(calls, ['/api/diagnostics', '/api/paywall-status']);
 });
 
 test('同步逐账号列出成功和失败,随后刷新失败不覆盖同步结果', async () => {

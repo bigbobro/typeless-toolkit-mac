@@ -92,6 +92,34 @@ test('浏览器登录入口只接受已保存的当前会话，不修改七个�
   }
 });
 
+test('恢复日志关联登录、抓取、保存和校验，可导出但不额外访问云端或泄露身份凭证', async () => {
+  const m = manager({ access_token: 'private-access-token', _http_status: 200 }, true, {
+    ensureApp: async () => {}, startAppLogin: async check => check({ user_id: 'target', refresh_token: 'saved-refresh' }),
+  });
+  await m.run('GET', '/api/accounts');
+  await m.run('POST', '/api/login/start', { expected_user_id: 'target' });
+  const captured = await m.run('POST', '/api/capture');
+  await m.run('POST', '/api/accounts', { capture_id: captured.body.data.capture_id, expected_user_id: 'target' });
+  await m.run('GET', '/api/accounts');
+  const before = m.calls.length;
+  const out = await m.run('GET', '/api/diagnostic-log');
+  assert.equal(m.calls.length, before, '导出不能触发云端请求');
+  const events = out.body.data.events.filter(e => e.session === out.body.data.logging.session);
+  const operations = events.filter(e => e.event === 'operation_finished');
+  assert.deepEqual(operations.map(e => e.operation), ['refresh_accounts', 'browser_login', 'capture', 'save_account', 'refresh_accounts']);
+  assert.ok(operations.every(e => e.outcome === 'ok'));
+  const saved = events.find(e => e.event === 'saved');
+  const capturedEvent = events.find(e => e.event === 'captured');
+  assert.equal(saved.account_ref, capturedEvent.account_ref);
+  assert.equal(saved.credential_ref, capturedEvent.credential_ref);
+  assert.equal(saved.updated_existing, true);
+  const text = JSON.stringify(out.body);
+  for (const secret of ['test@example.com', 'saved-refresh', 'new-refresh', 'private-access-token', captured.body.data.capture_id]) assert.ok(!text.includes(secret));
+  await m.run('POST', '/api/accounts', { capture_id: 'no-longer-valid' });
+  const failure = await m.run('GET', '/api/diagnostic-log');
+  assert.equal(failure.body.data.events.at(-1).error_code, 'CAPTURE_EXPIRED');
+});
+
 test('正在重新登录当前账号时允许替换旧会话，不能借此绕过其他账号的保存检查', async () => {
   for (const id of ['target', 'other']) {
     const m = manager({}, true, {
@@ -110,6 +138,23 @@ test('列表区分服务器拒绝的登录凭证和网络异常,不依赖资料�
     const result = await m.run('GET', '/api/accounts');
     assert.equal(result.body.data[0].login_status, expected);
     assert.ok(!JSON.stringify(result.body).includes('saved-refresh'));
+  }
+});
+
+test('列表保留登录刷新检查的 HTTP 状态、业务码和时间，不包含响应凭证', async () => {
+  for (const [response, status, httpStatus, apiCode] of [
+    [{ _http_status: 401, code: 402, detail: 'synthetic-sensitive-response' }, 'expired', 401, 402],
+    [{ _http_status: 200, access_token: 'synthetic-access' }, 'valid', 200, null],
+    [{ _http_status: null, _error: 'non-json', _raw: 'synthetic-sensitive-response' }, 'unknown', null, null],
+  ]) {
+    const m = manager(response);
+    const result = await m.run('GET', '/api/accounts');
+    const account = result.body.data[0];
+    assert.equal(account.login_status, status);
+    assert.equal(account.login_check.http_status, httpStatus);
+    assert.equal(account.login_check.api_code, apiCode);
+    assert.ok(Number.isFinite(Date.parse(account.login_check.checked_at)));
+    assert.doesNotMatch(JSON.stringify(result.body), /synthetic-sensitive-response|synthetic-access|saved-refresh/);
   }
 });
 
