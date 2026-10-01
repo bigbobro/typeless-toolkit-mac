@@ -79,3 +79,11 @@ test('未登录也能使用官方入口，客户端不支持时明确失败', as
   const unsupported = fixture({ opened: false });
   await assert.rejects(unsupported.cdp.startAppLogin(() => {}), /浏览器登录/);
 });
+
+test('流程检测只读取客户端当前会话，不刷新访问令牌或触发网页登录', async () => {
+  const f = fixture();
+  const session = await f.cdp.readAppSession();
+  assert.equal(session.user_id, 'a'); assert.equal(session.token, 'synthetic-refresh-a');
+  assert.deepEqual(f.calls, [['auth:get-current', undefined]]);
+  f.setCurrent(null); assert.equal(await f.cdp.readAppSession(), null);
+});

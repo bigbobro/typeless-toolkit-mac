@@ -220,7 +220,7 @@ function operationResult(message,failed=false){
   el.className='banner'+(failed?' warn':''); el.style.display='flex';
 }
 function openModal(id){ document.getElementById(id).classList.add('on'); }
-function closeModal(id){ document.getElementById(id).classList.remove('on'); }
+function closeModal(id){ document.getElementById(id).classList.remove('on'); if(id==='addMask') stopLoginPoll(); }
 // Esc 关闭当前打开的弹窗(不改变原有点击遮罩关闭的行为)
 document.addEventListener('keydown', e=>{
   if(e.key!=='Escape') return;
@@ -250,7 +250,7 @@ function confirmModal(msg, opts={}){
 let BUSY=false;
 function setBusy(v){
   BUSY=v;
-  ['btnSyncAll','btnResetDevice','btnPatchPaywall','btnSyncOne','addLoginBtn','rgLoginBtn'].forEach(id=>{
+  ['btnSyncAll','btnResetDevice','btnPatchPaywall','btnSyncOne'].forEach(id=>{
     const el=document.getElementById(id); if(el) el.disabled=v;
   });
   document.querySelectorAll('.cbtn:not(.off)').forEach(b=>{ b.disabled=v; });
@@ -757,158 +757,90 @@ async function rmAccount(id=curDetail?.user_id){
   }catch(e){ toast('移除失败: '+e.message,'err'); }
 }
 
-let ADD_TARGET_ID=null;
-function addAccount(id=null){
-  if(BUSY) return;
-  const account=ACCOUNTS.find(a=>a.user_id===id);
-  ADD_TARGET_ID=account?.user_id||null; window._cap=null;
-  closeModal('detailMask');
-  openModal('addMask');
-  document.getElementById('addTitle').textContent=account?'重新登录账号':'添加新账号';
-  document.getElementById('addIntro').textContent=account
-    ? '点「打开浏览器登录」，登录「'+(account.email||account.nickname)+'」并返回 Typeless，再读取并保存以更新原账号。网页账号不符时先停止本次登录；不要通过网页或 Typeless 的「退出登录」换号，退出会请求服务器撤销凭证。'
-    : '点「打开浏览器登录」登录新账号，返回 Typeless 后读取并保存。若 Typeless 已登录要添加的账号，可直接读取。登录其他账号前，请先保存当前会话。网页账号不符时先停止本次登录；不要通过网页或 Typeless 的「退出登录」换号，退出会请求服务器撤销凭证。';
-  document.getElementById('addRegEntry').style.display=account?'none':'block';
+// 登录步骤由后端统一判断；页面刷新、多标签页和请求丢失都先回读同一个流程。
+let LOGIN_FLOW=null, LOGIN_FLOW_PENDING=false, LOGIN_FLOW_TIMER=null, LOGIN_FLOW_SHOWN=null;
+function stopLoginPoll(){ clearTimeout(LOGIN_FLOW_TIMER); LOGIN_FLOW_TIMER=null; }
+function renderLoginFlow(){
+  const f=LOGIN_FLOW;
+  const banner=document.getElementById('loginFlowBanner');
+  banner.style.display=f?.active?'flex':'none';
+  document.getElementById('loginFlowBannerText').textContent=f?.active?'登录流程尚未结束，账号轮动暂时等待。':'';
+  if(!f) return;
+  document.getElementById('addTitle').textContent=f.target_id?'重新登录账号':'添加新账号';
+  document.getElementById('flowTarget').textContent=f.target?'目标账号：'+(f.target.email||f.target.nickname):'登录并保存要添加的账号';
+  document.getElementById('flowSteps').textContent=['检查准备','完成登录','确认账号','校验结果'].map((label,i)=>(i+1===f.step?'● ':'')+(i+1)+'. '+label).join('  ›  ');
+  document.getElementById('flowMessage').textContent=f.message||'正在读取流程状态…';
+  const confirm=['confirm','protect_current'].includes(f.stage);
+  document.getElementById('flowIdentity').hidden=!confirm;
+  if(confirm){
+    const key=f.flow_id+':'+f.revision;
+    if(LOGIN_FLOW_SHOWN!==key){ document.getElementById('addNick').value=f.account?.nickname||f.account?.email||''; LOGIN_FLOW_SHOWN=key; }
+    document.getElementById('addEmail').value=f.account?.email||'';
+  }
+  const primary=document.getElementById('flowPrimary');
+  primary.textContent=LOGIN_FLOW_PENDING||f.busy?'正在检查…':f.action?.label||'正在读取…';
+  primary.disabled=LOGIN_FLOW_PENDING||f.busy||!f.action;
+  document.getElementById('flowCancel').hidden=!f.active;
+  document.getElementById('flowCancel').disabled=LOGIN_FLOW_PENDING||f.busy;
+  document.getElementById('flowReopen').hidden=!f.can_reopen_browser;
+  document.getElementById('flowReopen').disabled=LOGIN_FLOW_PENDING;
+  document.getElementById('flowBrowserHelp').hidden=!['waiting_login','login_required'].includes(f.stage);
+  document.getElementById('flowChanged').textContent=(f.changed_accounts||[]).map(a=>a.email||a.nickname||a.user_id).join('、');
+  stopLoginPoll();
+  if(!LOGIN_FLOW_PENDING&&(f.auto_check||f.busy)&&document.getElementById('addMask').classList.contains('on')){
+    LOGIN_FLOW_TIMER=setTimeout(()=>f.busy?resumeLoginFlow(false):loginFlowAction('check',true),3000);
+  }
+}
+async function resumeLoginFlow(show=true){
+  const r=await api('/api/login-flow');
+  if(r.status!=='OK') { document.getElementById('addError').textContent=r.msg||'流程读取失败，请刷新页面重试。'; return false; }
+  LOGIN_FLOW=r.data;
+  if(show&&LOGIN_FLOW.active) openModal('addMask');
+  renderLoginFlow();
+  return true;
+}
+async function addAccount(id=null){
+  if(BUSY||LOGIN_FLOW_PENDING) return;
+  closeModal('detailMask'); openModal('addMask');
   document.getElementById('addError').textContent='';
-  document.getElementById('addLoginStatus').textContent='';
-  document.getElementById('addStep1').style.display='block';
-  document.getElementById('addStep2').style.display='none';
-}
-async function startBrowserLogin(registration=false){
-  if(BUSY) return;
-  const error=document.getElementById(registration?'rgError':'addError');
-  const status=document.getElementById(registration?'rgLoginStatus':'addLoginStatus');
-  error.textContent=''; status.textContent=''; setBusy(true);
+  document.getElementById('flowMessage').textContent='正在检查当前状态…';
+  document.getElementById('flowPrimary').disabled=true;
+  LOGIN_FLOW_PENDING=true;
   try{
-    const body=!registration&&ADD_TARGET_ID?{expected_user_id:ADD_TARGET_ID}:{};
-    const r=await api('/api/login/start',{method:'POST',body:JSON.stringify(body)});
-    if(r.status!=='OK') throw new Error(r.msg||'无法打开浏览器登录');
-    status.textContent=r.msg;
-    if(registration){ REG_LOGIN_STARTED=true; await regPoll(); }
-  }catch(e){ error.textContent=e.message; }
-  finally{ setBusy(false); }
-}
-async function doCapture(){
-  const btn=document.getElementById('capBtn'); btn.disabled=true; btn.textContent='正在读取…';
-  document.getElementById('addError').textContent='';
-  try{
-    const current=await api('/api/current');
-    if(current.status!=='OK') throw new Error(current.code==='MANAGEMENT_CONNECTION_REQUIRED'?'请先连接 Typeless，再登录账号。':current.code==='CURRENT_ACCOUNT_UNAVAILABLE'?'尚未检测到登录，请先在 Typeless 完成登录。':current.msg||'登录状态读取失败，请重试。');
-    if(ADD_TARGET_ID && current.data.user_id!==ADD_TARGET_ID) throw new Error('当前登录的不是要更新的账号，请在 Typeless 登录原账号后重试。');
-    const r=await api('/api/capture',{method:'POST'});
-    if(r.status!=='OK') throw new Error(r.msg||'读取失败');
-    const d=r.data;
-    if(ADD_TARGET_ID && d.user_id!==ADD_TARGET_ID) throw new Error('当前登录的不是要更新的账号，请重新登录原账号。');
-    window._cap=d;
-    document.getElementById('addStep1').style.display='none';
-    document.getElementById('addStep2').style.display='block';
-    const exist=ACCOUNTS.find(x=>x.user_id===d.user_id);
-    document.getElementById('addNick').value=exist?.nickname||d.nickname||d.email||'';
-    document.getElementById('addEmail').value=d.email||'';
-    document.getElementById('addMeta').value=d.role||'未知';
-    document.getElementById('addSaveBtn').textContent=exist?'更新原账号':'保存账号';
-    document.getElementById('addExist').textContent=exist?'保存将更新原账号的登录凭证和快照，不会重复添加。':'';
-  }catch(e){ document.getElementById('addError').textContent=e.message; }
-  finally{ btn.disabled=false; btn.textContent='我已登录，读取当前账号'; }
-}
-async function saveAccount(){
-  const d=window._cap; if(!d) return;
-  const existing=ACCOUNTS.some(a=>a.user_id===d.user_id);
-  const btn=document.getElementById('addSaveBtn'); btn.disabled=true;
-  try{
-  const r=await api('/api/accounts',{method:'POST',body:JSON.stringify({
-    capture_id:d.capture_id,
-    expected_user_id:ADD_TARGET_ID||undefined,
-    nickname:document.getElementById('addNick').value.trim(),
-    email:document.getElementById('addEmail').value.trim()||d.email,
-  })});
-  if(r.status!=='OK'){
-    if(['CAPTURE_EXPIRED','CURRENT_ACCOUNT_CHANGED','ACCOUNT_MISMATCH','ACCOUNT_LOGIN_EXPIRED'].includes(r.code)) addAccount(ADD_TARGET_ID);
-    throw new Error(r.msg||'保存失败');
-  }
-  const saved={...d,...r.data,has_snapshot:true,login_status:'unknown'};
-  delete saved.capture_id;
-  ACCOUNTS=ACCOUNTS.filter(a=>a.user_id!==d.user_id).concat(saved); ACCOUNTS_LOADED=true; render();
-  closeModal('addMask'); window._cap=null;
-  toast(existing?'原账号登录已更新':'账号已添加','ok');
-  let result=existing?'原账号登录已更新。':'账号已添加。';
-  let importFailed=false;
-  // 自动迁移:把主词库导入新账号
-  if(!existing){
-  const m=await api('/api/accounts/'+encodeURIComponent(d.user_id)+'/import-master',{method:'POST'});
-  if(m.status==='OK') result+='已导入 '+m.data.imported+' 个词。';
-  else{ importFailed=true; result+='词库导入未完成：'+(m.msg||'请稍后重试')+'。可打开账号详情，点「从主词库导入」重试。'; }
-  }
-  await loadAccounts(); await detectCurrent(true);
-  operationResult(result,importFailed);
-  }catch(e){ document.getElementById('addError').textContent=e.message; toast(e.message,'err'); }
-  finally{ btn.disabled=false; }
-}
-
-// ===== 注册新账号引导:轮询 /api/current 驱动三步状态 =====
-// 浏览器登录期间保留旧账号；回到桌面端且检测到新账号后才能读取保存。
-let REG_TIMER=null, REG_POLLING=false, REG_DETECTED=null, REG_LOGIN_STARTED=false;
-function openRegGuide(){
-  REG_DETECTED=null; REG_LOGIN_STARTED=false;
-  document.getElementById('rgError').textContent='';
-  document.getElementById('rgLoginStatus').textContent='';
-  openModal('regMask');
-  regRender(1);
-  regPoll();
-  if(!REG_TIMER) REG_TIMER=setInterval(regPoll,4000);
-}
-function regRender(phase,info){
-  info=info||{};
-  const conn=document.getElementById('rgConn');
-  if(info.disconnected){
-    conn.style.display='flex';
-    conn.innerHTML='<span>⚠ 管理连接未开启，无法自动检测 Typeless 登录状态</span>'
-      +'<button class="btn small" data-tr data-tip="启动或重启 Typeless 一次，开启管理连接" onclick="launch()">⏻ 连接 Typeless</button>';
-  }else{ conn.style.display='none'; conn.innerHTML=''; }
-  for(let i=1;i<=3;i++){
-    document.getElementById('rgStep'+i).className='rg-step'+(i<phase?' done':(i===phase?' on':''));
-    document.getElementById('rgNum'+i).textContent=i<phase?'✓':String(i);
-  }
-  const h1=document.getElementById('rgHint1');
-  if(info.knownLogin){ h1.style.display='block'; h1.textContent='Typeless 当前仍登录「'+info.knownLogin+'」。请在浏览器完成新账号登录并返回应用。'; }
-  else{ h1.style.display='none'; h1.textContent=''; }
-  document.getElementById('rgWait').style.display=(phase===2&&!info.disconnected)?'flex':'none';
-  const det=document.getElementById('rgDetected'), cap=document.getElementById('rgCapWrap');
-  if(phase===3&&REG_DETECTED){
-    det.innerHTML='✓ 检测到新账号 <b>'+esc(REG_DETECTED.email||REG_DETECTED.user_id)+'</b> 已登录。确认是刚注册的新账号后，点下方按钮加入管理器。';
-    cap.style.display='flex';
-  }else{
-    det.textContent='检测到新账号登录后，这一步会自动亮起。';
-    cap.style.display='none';
-  }
-}
-async function regPoll(){
-  const mask=document.getElementById('regMask');
-  // 任何方式关闭弹窗(✕/遮罩/Esc)后,下一轮自清理定时器
-  if(!mask.classList.contains('on')){ if(REG_TIMER){ clearInterval(REG_TIMER); REG_TIMER=null; } return; }
-  if(REG_POLLING) return;
-  REG_POLLING=true;
-  try{
-    const r=await api('/api/current');
-    if(!mask.classList.contains('on')) return;
-    if(r.status==='OK'&&r.data){
-      const d=r.data;
-      const known=ACCOUNTS.find(x=>x.user_id===d.user_id);
-      if(known){ REG_DETECTED=null; regRender(REG_LOGIN_STARTED?2:1,{knownLogin:known.nickname||known.email||d.user_id}); }
-      else{ REG_DETECTED=d; regRender(3); }
-    }else{
-      REG_DETECTED=null;
-      if(r.data?.state==='connected') regRender(2);
-      else regRender(1,{disconnected:true});
+    if(!await resumeLoginFlow(false)) return;
+    if(!LOGIN_FLOW.active){
+      const r=await api('/api/login-flow',{method:'POST',body:JSON.stringify({action:'start',target_id:id})});
+      if(r.data) LOGIN_FLOW=r.data;
+      if(r.status!=='OK'){
+        document.getElementById('addError').textContent=r.msg||'流程未能开始';
+        if(r.code==='CONNECTION_ERROR') await resumeLoginFlow(false);
+      }
     }
-  }catch(e){ REG_DETECTED=null; regRender(1,{disconnected:true}); }
-  finally{ REG_POLLING=false; }
+  }finally{ LOGIN_FLOW_PENDING=false; renderLoginFlow(); }
 }
-function regCapture(){
-  if(REG_TIMER){ clearInterval(REG_TIMER); REG_TIMER=null; }
-  closeModal('regMask');
-  addAccount();   // 复用添加弹窗:抓取成功后自动进入保存表单(含自动导入主词库)
-  doCapture();
+async function loginFlowAction(action=LOGIN_FLOW?.action?.id,automatic=false){
+  if(LOGIN_FLOW_PENDING||!LOGIN_FLOW||!action) return;
+  if(action==='finish'){ closeModal('addMask'); await refreshAfterLoginFlow(); return; }
+  if(action==='export_log'){ await exportDiagnosticLog(); return; }
+  stopLoginPoll(); LOGIN_FLOW_PENDING=true;
+  document.getElementById('addError').textContent='';
+  const body={flow_id:LOGIN_FLOW.flow_id,revision:LOGIN_FLOW.revision,action,automatic};
+  if(action==='save'||action==='save_current') body.nickname=document.getElementById('addNick').value.trim();
+  renderLoginFlow();
+  try{
+    const r=await api('/api/login-flow',{method:'POST',body:JSON.stringify(body)});
+    if(r.data) LOGIN_FLOW=r.data;
+    if(r.status!=='OK'){
+      document.getElementById('addError').textContent=r.msg||'当前步骤未能完成';
+      // 不重发保存。先回读服务端，避免请求成功但响应丢失时重复写入。
+      if(!r.data) await resumeLoginFlow(false);
+    }
+    if(LOGIN_FLOW.stage==='cancelled'){ closeModal('addMask'); await refreshAfterLoginFlow(); }
+  }finally{ LOGIN_FLOW_PENDING=false; renderLoginFlow(); }
+}
+async function refreshAfterLoginFlow(){
+  await loadAccounts(); await detectCurrent(true); await loadRotationStatus();
+  if(LOGIN_FLOW?.stage==='done') operationResult(LOGIN_FLOW.message,LOGIN_FLOW.sync_warning);
 }
 
 // 当前账号本周额度用满时,顶部横幅主动引导注册新账号(每次会话可忽略)
@@ -923,7 +855,7 @@ function updateQuotaBanner(){
   b.style.display='flex';
   b.innerHTML='<span>⚠ 当前账号「'+esc(cur.nickname)+'」本周额度已用满（'+u.week_word_usage_value.toLocaleString()+' / '+lim.toLocaleString()+'）— 可注册一个新账号继续使用。</span>'
     +'<span style="display:flex;gap:10px;align-items:center;flex:none;">'
-    +'<button class="btn small" data-tip="打开浏览器登录 → 返回 Typeless → 读取保存" onclick="openRegGuide()">→ 注册新账号引导</button>'
+    +'<button class="btn small" data-tip="打开浏览器登录 → 返回 Typeless → 读取保存" onclick="addAccount()">→ 添加新账号</button>'
     +'<span class="x" data-tip="本次会话不再提示" onclick="QUOTA_DISMISSED=true;updateQuotaBanner()">✕</span></span>';
 }
 
@@ -1044,6 +976,7 @@ async function renderDiag(){
   }finally{ diagRunning=false; }
 }
 async function bootDetect(){
+  await resumeLoginFlow();
   try{ await loadAccounts(); }catch(e){ toast('账号加载失败: '+e.message,'err'); }
   await detectCurrent(true);
   try{
@@ -1082,7 +1015,7 @@ async function detectCurrent(fromBoot){
       b.style.display='none';
     }else{
       // 未收录:横幅引导打开添加入口并直接读取已登录账号,常驻(留在文档流占位显眼)
-      b.textContent='当前 Typeless 登录: '+(d.email||d.user_id)+'  — 未收录,点「添加新账号」后读取并保存';
+      b.textContent='当前 Typeless 登录: '+(d.email||d.user_id)+'  — 未收录,点「添加新账号」后按步骤确认保存';
       b.style.display='block';
     }
     render();

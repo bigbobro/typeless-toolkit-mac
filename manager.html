@@ -19,6 +19,7 @@
   <div class="banner warn" id="patchBanner"></div>
   <div class="banner warn" id="quotaBanner"></div>
   <div class="banner" id="banner"></div>
+  <div class="banner warn" id="loginFlowBanner"><span id="loginFlowBannerText"></span><button class="btn small" onclick="addAccount()">继续登录流程</button></div>
 
   <div class="backup-panel" id="backupPanel">
     <div class="backup-main">
@@ -154,69 +155,35 @@
   </div>
 </div>
 
-<!-- 添加账号 -->
+<!-- 添加与恢复共用服务端驱动的登录流程 -->
 <div class="mask" id="addMask" onclick="if(event.target===this)closeModal('addMask')">
-  <div class="modal" style="width:min(440px,94vw)">
-    <div class="hd"><h3 id="addTitle">添加新账号</h3><button class="btn small" data-tr data-tip="关闭" onclick="closeModal('addMask')">✕</button></div>
+  <div class="modal login-flow-modal" role="dialog" aria-modal="true" aria-labelledby="addTitle">
+    <div class="hd"><h3 id="addTitle">添加新账号</h3><button class="btn small" aria-label="收起登录流程" onclick="closeModal('addMask')">✕</button></div>
     <div class="bd">
-      <div id="addStep1">
-        <div id="addIntro" class="recovery-note"></div>
-        <p class="recovery-note"><a href="https://github.com/bigbobro/typeless-toolkit-mac/blob/macos-v2.9.5/LOGIN-RECOVERY.md" target="_blank" rel="noopener noreferrer">登录恢复与日志反馈指引</a>：不用先移除账号；网页选错账号时按指引处理。</p>
-        <button class="btn" onclick="launch()">连接 Typeless</button>
-        <button class="btn" id="addLoginBtn" onclick="startBrowserLogin()">打开浏览器登录</button>
-        <div id="addLoginStatus" class="recovery-note" role="status"></div>
-        <button class="btn primary" data-tl data-tip="读取 Typeless 当前登录账号的凭证" onclick="doCapture()" id="capBtn">我已登录，读取当前账号</button>
-        <div class="add-reg-entry" id="addRegEntry">
-          还没有可添加的新账号？可通过引导在浏览器注册并登录，返回 Typeless 后读取保存。
-          <div style="margin-top:8px;"><button class="btn small" data-tl data-tip="打开浏览器登录 → 返回 Typeless → 读取保存" onclick="closeModal('addMask');openRegGuide()">→ 注册新账号引导</button></div>
-        </div>
-      </div>
-      <div id="addStep2" style="display:none">
-        <div class="field"><label>昵称</label><input class="fld" id="addNick"></div>
-        <div class="field"><label>邮箱</label><input class="fld" id="addEmail" readonly></div>
-        <div class="field"><label>套餐</label><input class="fld" id="addMeta" readonly></div>
-        <button class="btn primary" id="addSaveBtn" data-tl data-tip="保存登录凭证和快照；同一账号会更新原记录" onclick="saveAccount()">保存账号</button>
-        <button class="btn" onclick="addAccount(ADD_TARGET_ID)">返回重新读取</button>
-        <span id="addExist" style="font-size:12px;color:var(--amber);margin-left:10px;"></span>
+      <div id="flowSteps" class="flow-steps"></div>
+      <p id="flowTarget" class="flow-target"></p>
+      <p id="flowMessage" class="flow-message" role="status" aria-live="polite">正在检查当前状态…</p>
+      <p id="flowChanged" class="recovery-error"></p>
+      <div id="flowIdentity" hidden>
+        <div class="field"><label for="addEmail">请核对邮箱</label><input class="fld" id="addEmail" readonly></div>
+        <div class="field"><label for="addNick">昵称</label><input class="fld" id="addNick" maxlength="120"></div>
       </div>
       <div id="addError" class="recovery-error" role="alert"></div>
-    </div>
-  </div>
-</div>
-
-<!-- 注册新账号引导:三步向导,轮询 /api/current 自动点亮步骤 -->
-<div class="mask" id="regMask" onclick="if(event.target===this)closeModal('regMask')">
-  <div class="modal" style="width:min(540px,94vw)">
-    <div class="hd"><h3>注册新账号引导</h3><button class="btn small" data-tr data-tip="关闭" onclick="closeModal('regMask')">✕</button></div>
-    <div class="bd">
-      <div class="rg-conn" id="rgConn"></div>
-      <div class="rg-step" id="rgStep1">
-        <div class="rg-num" id="rgNum1">1</div>
-        <div class="rg-body">
-          <div class="rg-title">打开浏览器登录</div>
-          <div class="rg-desc">先在管理器读取并保存当前账号，再点下方按钮。网页账号不符时先停止本次登录；不要通过网页或 Typeless 的「退出登录」换号，退出会请求服务器撤销凭证。只有 Typeless 明确提示设备限制时，才使用「解除设备限制」。</div>
-          <div class="rg-hint" id="rgHint1"></div>
-          <div class="rg-act"><button class="btn small primary" id="rgLoginBtn" onclick="startBrowserLogin(true)">打开浏览器登录</button></div>
-          <div id="rgLoginStatus" class="recovery-note" role="status"></div>
-          <div id="rgError" class="recovery-error" role="alert"></div>
-        </div>
+      <button class="btn primary" id="flowPrimary" onclick="loginFlowAction()" disabled>正在检查…</button>
+      <details id="flowBrowserHelp" class="flow-help" hidden>
+        <summary>网页自动进入了错误账号？</summary>
+        <p>先关闭这次登录页。不要点击网页或 Typeless 的「退出登录」，该操作会请求服务器撤销凭证。</p>
+        <p>在默认浏览器设置中只清除 <b>typeless.com</b> 的站点数据，再用本流程的官方登录入口重新打开。不要清除全部浏览器数据。</p>
+        <p>Chrome：设置 → 隐私和安全 → 第三方 Cookie → 查看所有网站数据和权限，搜索 typeless.com 并删除。Safari：设置 → 隐私 → 管理网站数据，搜索 typeless.com 并移除。</p>
+        <p>登录目标账号后允许返回 Typeless。本工具只能检测桌面端收到的登录，无法替你观察或完成浏览器里的操作。</p>
+        <button class="btn small" id="flowReopen" onclick="loginFlowAction('open_browser')" hidden>重新打开官方登录页</button>
+      </details>
+      <div class="flow-footer">
+        <button class="btn small" id="flowCancel" onclick="loginFlowAction('cancel')" hidden>结束本次流程</button>
+        <button class="btn small" onclick="exportDiagnosticLog()">导出排查日志</button>
+        <a href="https://github.com/bigbobro/typeless-toolkit-mac/blob/macos-v2.9.5/LOGIN-RECOVERY.md" target="_blank" rel="noopener noreferrer">使用指引</a>
       </div>
-      <div class="rg-step" id="rgStep2">
-        <div class="rg-num" id="rgNum2">2</div>
-        <div class="rg-body">
-          <div class="rg-title">在浏览器注册或登录新账号，再返回 Typeless</div>
-          <div class="rg-desc">在浏览器选择登录方式，确认使用的是新账号。完成后允许浏览器打开 Typeless；桌面端接收登录后，这里会自动检测到。</div>
-          <div class="rg-wait" id="rgWait"><span class="spin"></span><span>正在等待检测新账号登录…</span></div>
-        </div>
-      </div>
-      <div class="rg-step" id="rgStep3">
-        <div class="rg-num" id="rgNum3">3</div>
-        <div class="rg-body">
-          <div class="rg-title">抓取并添加到管理器</div>
-          <div class="rg-desc" id="rgDetected">检测到新账号登录后，这一步会自动亮起。</div>
-          <div class="rg-act" id="rgCapWrap" style="display:none"><button class="btn small primary" data-tl data-tip="读取该账号凭证并保存到管理器，保存后自动导入主词库" onclick="regCapture()">读取并添加此账号</button></div>
-        </div>
-      </div>
+      <p class="recovery-note">收起页面后可从顶部继续；流程未结束时，账号轮动会等待。</p>
     </div>
   </div>
 </div>

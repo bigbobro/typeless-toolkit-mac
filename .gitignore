@@ -5,6 +5,7 @@ runtime-backups/
 patch-backups/
 typeless-version.json
 rotation.json
+login-flow.json
 *.csv
 *.bak
 

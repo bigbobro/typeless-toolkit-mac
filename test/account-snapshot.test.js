@@ -37,6 +37,15 @@ test('当前登录另一个账号时无法覆盖目标快照,损坏快照也不�
   assert.throws(()=>C.restoreSnapshot('a'),/不匹配/);
   assert.equal(C.readCurrentLogin().user_id,'b');
 });
+test('确认后同一账号的登录文件变化时，不能把旧凭证配上新快照',()=>{
+  login('a','confirmed-session');
+  const confirmed=C.readLoginFiles();
+  login('a','different-session');
+  assert.throws(()=>C.saveAccountWithSnapshot([{user_id:'a',token:'confirmed-token'}],'a',confirmed),
+    error=>error.code==='SNAPSHOT_CHANGED');
+  assert.equal(C.readAccounts()[0].token,'old');
+  assert.equal(fs.readFileSync(path.join(C.PROFILES_DIR,'a/user-data.json'),'utf8'),'old');
+});
 test('恢复快照不会混入另一账号的可选文件,切换前备份能逐字还原',()=>{
   login('b');fs.writeFileSync(path.join(C.USERDATA_DIR,'app-onboarding.json'),'b-onboarding');
   const backup=C.backupCurrentLogin(), before=C.readLoginFiles();

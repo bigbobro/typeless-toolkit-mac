@@ -90,6 +90,8 @@ test('真实 manager 只接受页面注入的本机会话,无 CORS,坏 JSON 不�
   assert.strictEqual(denied.status, 401);
   assert.strictEqual(denied.headers.get('access-control-allow-origin'), null);
   assert.strictEqual((await fetch(`${origin}/api/diagnostic-log`)).status, 401);
+  assert.strictEqual((await fetch(`${origin}/api/login-flow`)).status, 401);
+  assert.strictEqual((await fetch(`${origin}/api/login-flow`, { method: 'POST' })).status, 401);
 
   const page = await fetch(`${origin}/`);
   assert.strictEqual(page.status, 200);
@@ -98,6 +100,10 @@ test('真实 manager 只接受页面注入的本机会话,无 CORS,坏 JSON 不�
   const match = html.match(/const SESSION_SECRET = ("[A-Za-z0-9_-]+");/);
   assert.ok(match, '页面应包含本次启动的 session secret');
   const secret = JSON.parse(match[1]);
+  const flow = await fetch(`${origin}/api/login-flow`, { headers: { 'x-typeless-session': secret } });
+  assert.strictEqual((await flow.json()).data.active, false);
+  const legacy = await fetch(`${origin}/api/capture`, { method: 'POST', headers: { 'x-typeless-session': secret, Origin: origin } });
+  assert.strictEqual(legacy.status, 410);
   const logExport = await fetch(`${origin}/api/diagnostic-log`, { headers: { 'x-typeless-session': secret } });
   assert.strictEqual(logExport.status, 200);
   const exported = await logExport.json();

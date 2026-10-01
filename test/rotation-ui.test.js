@@ -188,9 +188,9 @@ test('更新指定账号登录沿用现有引导，先登录提示和目标账�
     issue: { message: '没有可用的下一个账号', action: 'accounts' },
     candidate_issues: [{ message: '登录凭证失效', action: 'update-login', account_id: 'target' }],
   } }).data);
+  let target; ui.addAccount=id=>{ target=id; };
   await ui.recoverRotationIssue(1);
-  assert.equal(vm.runInContext('ADD_TARGET_ID', ui), 'target');
-  assert.match(element('addIntro').textContent, /打开浏览器登录.*test@example.com/);
+  assert.equal(target, 'target');
   assert.deepEqual(requests.map(r => r.url), ['/api/rotation']);
 });
 

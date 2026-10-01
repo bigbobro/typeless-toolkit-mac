@@ -40,6 +40,7 @@ function manager(options = {}) {
     CODE_DIR: path.join(__dirname, '..'), ROOT: dataDir, config: { manager_port: 7788 },
     readAccounts: () => accounts,
     readCurrentLogin: () => ({ user_id: activeId }),
+    readAppSession: async () => ({ user_id: activeId, token: 'fixture-refresh-' + activeId }),
     ensureApp: async () => options.ensureApp ? options.ensureApp() : { state: 'connected' },
     readActiveAccountId: async () => options.readActiveAccountId ? options.readActiveAccountId(activeId) : activeId,
     readAccountUsage: async account => {
@@ -481,4 +482,22 @@ test('词库同步失败保留切号成功，明确提示可重试同步而不�
   const notices = m.calls.filter(call => call[0] === 'notify');
   assert.equal(notices.length, 1);
   assert.equal(notices[0][1].title, 'Typeless 账号已切换');
+});
+
+
+test('登录流程进行中及重启待恢复时轮动等待，结束后恢复检查', async () => {
+  const m = manager(); await m.enable();
+  const start = await m.run('POST', '/api/login-flow', { action: 'start' });
+  assert.equal(start.body.data.stage, 'login_required');
+  const before = m.calls.length;
+  await m.engine.check();
+  assert.equal(m.calls.length, before);
+  const restarted = manager({ dataDir: m.dataDir });
+  const resumed = await restarted.run('GET', '/api/login-flow');
+  assert.equal(resumed.body.data.stage, 'interrupted');
+  await restarted.engine.check();
+  assert.deepEqual(restarted.calls, []);
+  await restarted.run('POST', '/api/login-flow', { ...resumed.body.data, action: 'cancel' });
+  await restarted.engine.check();
+  assert.ok(restarted.calls.some(c => c[0] === 'usage'));
 });

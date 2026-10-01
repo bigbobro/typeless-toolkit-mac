@@ -19,6 +19,9 @@ function manager(refresh, verified = true, overrides = {}) {
   let accounts = [{ user_id: 'target', nickname: '旧昵称', token: 'saved-refresh', added_at: 'original-date' }];
   const deps = {
     ...common,
+    ROOT: fs.mkdtempSync(path.join(root, 'manager-')),
+    ensureApp: async () => {},
+    readAppSession: async () => ({ user_id: 'target', token: 'new-refresh' }),
     readAccounts: () => accounts,
     writeAccounts: (value) => { accounts = value; },
     liveStatus: async () => ({ token_valid: true }),
@@ -64,72 +67,50 @@ function manager(refresh, verified = true, overrides = {}) {
   };
 }
 
-test('浏览器登录入口只接受已保存的当前会话，不修改七个账号的凭证', async () => {
-  const accounts = Array.from({ length: 7 }, (_, i) => ({ user_id: `u${i}`, token: `saved-${i}` }));
-  for (const mode of ['saved', 'missing', 'stale', 'no-snapshot', 'logged-out']) {
-    let opened = false;
-    const m = manager({}, true, {
-      readAccounts: () => accounts,
-      ensureApp: async () => {},
-      hasSnapshot: () => mode !== 'no-snapshot',
-      startAppLogin: async check => {
-        await check(mode === 'logged-out' ? null : {
-          user_id: mode === 'missing' ? 'unsaved' : 'u0',
-          refresh_token: mode === 'stale' ? 'new-session' : 'saved-0',
-        });
-        opened = true;
-      },
-    });
-    const before = JSON.stringify(accounts);
-    const result = await m.run('POST', '/api/login/start', {});
-    const allowed = mode === 'saved' || mode === 'logged-out';
-    assert.equal(result.body.status, allowed ? 'OK' : 'FAIL', mode);
-    assert.doesNotMatch(JSON.stringify(result.body), /saved-0|new-session/);
-    assert.equal(opened, allowed, mode);
-    if (!allowed) assert.match(result.body.msg, /保存当前账号/);
-    assert.equal(JSON.stringify(accounts), before);
-    assert.deepEqual(m.calls, [], '不退出应用、不覆盖快照、不更新其他账号');
+test('登录流程期间阻止其他写操作与旧入口，列表刷新不额外访问云端', async () => {
+  const m = manager({ access_token: 'access' });
+  const started = await m.run('POST', '/api/login-flow', { action: 'start', target_id: 'target' });
+  assert.equal(started.body.data.stage, 'confirm');
+  const before = m.calls.length;
+  await m.run('GET', '/api/accounts');
+  const resumed = await m.run('GET', '/api/login-flow');
+  assert.equal(resumed.body.data.flow_id, started.body.data.flow_id);
+  assert.equal(m.calls.length, before);
+  for (const url of ['/api/accounts/target/switch', '/api/reset-device', '/api/rotation', '/api/capture']) {
+    const result = await m.run('POST', url, {});
+    assert.equal(result.body.code, 'LOGIN_FLOW_ACTIVE');
   }
+  await m.run('POST', '/api/login-flow', { ...started.body.data, action: 'cancel' });
+  for (const url of ['/api/login/start', '/api/capture', '/api/accounts']) {
+    assert.equal((await m.run('POST', url, {})).body.code, 'LOGIN_FLOW_REQUIRED');
+  }
+  assert.ok(!m.calls.some(c => ['stop', 'snapshot'].includes(c[0])));
 });
 
-test('恢复日志关联登录、抓取、保存和校验，可导出但不额外访问云端或泄露身份凭证', async () => {
-  const m = manager({ access_token: 'private-access-token', _http_status: 200 }, true, {
-    ensureApp: async () => {}, startAppLogin: async check => check({ user_id: 'target', refresh_token: 'saved-refresh' }),
-  });
-  await m.run('GET', '/api/accounts');
-  await m.run('POST', '/api/login/start', { expected_user_id: 'target' });
-  const captured = await m.run('POST', '/api/capture');
-  await m.run('POST', '/api/accounts', { capture_id: captured.body.data.capture_id, expected_user_id: 'target' });
-  await m.run('GET', '/api/accounts');
+test('流程日志跨请求关联状态、保存和校验；导出不访问云端或泄露身份凭证', async () => {
+  const m = manager({ access_token: 'private-access-token', _http_status: 200 });
+  const start = await m.run('POST', '/api/login-flow', { action: 'start', target_id: 'target' });
+  const flow = start.body.data;
+  const savedResult = await m.run('POST', '/api/login-flow', { ...flow, action: 'save' });
+  assert.equal(savedResult.body.data.stage, 'done');
+  const duplicate = await m.run('POST', '/api/login-flow', { ...flow, action: 'save' });
+  assert.equal(duplicate.body.code, 'LOGIN_FLOW_CHANGED');
+  assert.equal(m.calls.filter(c => c[0] === 'snapshot').length, 1);
   const before = m.calls.length;
   const out = await m.run('GET', '/api/diagnostic-log');
-  assert.equal(m.calls.length, before, '导出不能触发云端请求');
-  const events = out.body.data.events.filter(e => e.session === out.body.data.logging.session);
-  const operations = events.filter(e => e.event === 'operation_finished');
-  assert.deepEqual(operations.map(e => e.operation), ['refresh_accounts', 'browser_login', 'capture', 'save_account', 'refresh_accounts']);
-  assert.ok(operations.every(e => e.outcome === 'ok'));
+  assert.equal(m.calls.length, before);
+  const events = out.body.data.events.filter(e => e.flow_id === flow.flow_id);
   const saved = events.find(e => e.event === 'saved');
-  const capturedEvent = events.find(e => e.event === 'captured');
-  assert.equal(saved.account_ref, capturedEvent.account_ref);
-  assert.equal(saved.credential_ref, capturedEvent.credential_ref);
+  const captured = events.find(e => e.event === 'captured');
+  assert.equal(saved.account_ref, captured.account_ref);
+  assert.equal(saved.credential_ref, captured.credential_ref);
   assert.equal(saved.updated_existing, true);
-  const text = JSON.stringify(out.body);
-  for (const secret of ['test@example.com', 'saved-refresh', 'new-refresh', 'private-access-token', captured.body.data.capture_id]) assert.ok(!text.includes(secret));
-  await m.run('POST', '/api/accounts', { capture_id: 'no-longer-valid' });
-  const failure = await m.run('GET', '/api/diagnostic-log');
-  assert.equal(failure.body.data.events.at(-1).error_code, 'CAPTURE_EXPIRED');
-});
-
-test('正在重新登录当前账号时允许替换旧会话，不能借此绕过其他账号的保存检查', async () => {
-  for (const id of ['target', 'other']) {
-    const m = manager({}, true, {
-      ensureApp: async () => {},
-      startAppLogin: async check => check({ user_id: 'target', refresh_token: 'changed' }),
-    });
-    const result = await m.run('POST', '/api/login/start', { expected_user_id: id });
-    assert.equal(result.body.status, id === 'target' ? 'OK' : 'FAIL');
-    assert.equal(m.accounts[0].token, 'saved-refresh');
-  }
+  assert.equal(events.find(e => e.event === 'login_target').account_ref, captured.account_ref);
+  assert.equal(events.find(e => e.event === 'login_current').credential_ref, captured.credential_ref);
+  assert.ok(events.some(e => e.event === 'login_check'));
+  assert.ok(events.some(e => e.stage === 'done'));
+  assert.equal(events.filter(e => e.event === 'operation_finished' && e.outcome === 'ok').length, 2);
+  for (const secret of ['test@example.com', 'saved-refresh', 'new-refresh', 'private-access-token']) assert.ok(!JSON.stringify(out.body).includes(secret));
 });
 
 test('列表区分服务器拒绝的登录凭证和网络异常,不依赖资料接口或 JWT 剩余天数', async () => {
@@ -160,8 +141,9 @@ test('列表保留登录刷新检查的 HTTP 状态、业务码和时间，不�
 
 test('重新添加同一个账号会更新原记录和快照,保留最初添加时间', async () => {
   const m = manager({ access_token: 'access' });
-  const captured = await m.run('POST', '/api/capture');
-  const result = await m.run('POST', '/api/accounts', { capture_id: captured.body.data.capture_id, expected_user_id: 'target' });
+  const started = await m.run('POST', '/api/login-flow', { action: 'start', target_id: 'target' });
+  const result = await m.run('POST', '/api/login-flow', { ...started.body.data, action: 'save' });
+  assert.equal(result.body.data.stage, 'done');
   assert.equal(result.body.status, 'OK');
   assert.equal(m.accounts.length, 1);
   assert.equal(m.accounts[0].token, 'new-refresh');
@@ -171,8 +153,7 @@ test('重新添加同一个账号会更新原记录和快照,保留最初添加�
 
 test('恢复指定账号时不能误保存另一个账号;移除后列表不再显示', async () => {
   const m = manager({ access_token: 'access' });
-  const captured = await m.run('POST', '/api/capture');
-  const result = await m.run('POST', '/api/accounts', { capture_id: captured.body.data.capture_id, expected_user_id: 'other' });
+  const result = await m.run('POST', '/api/login-flow', { action: 'start', target_id: 'other' });
   assert.equal(result.body.status, 'FAIL');
   assert.equal(m.accounts[0].token, 'saved-refresh');
   assert.ok(!m.calls.some(c => c[0] === 'snapshot'));
@@ -286,9 +267,9 @@ test('已删除单独写快照入口,不能把当前账号写入另一个账号'
 
 test('账号或快照保存失败不会提前覆盖旧账号记录', async () => {
   const m=manager({ access_token:'access' },true,{ saveAccountWithSnapshot:()=>{throw new Error('磁盘写入失败');} });
-  const captured=await m.run('POST','/api/capture');
-  const r=await m.run('POST','/api/accounts',{ capture_id:captured.body.data.capture_id });
-  assert.equal(r.body.status,'FAIL');
+  const started=await m.run('POST','/api/login-flow',{action:'start',target_id:'target'});
+  const r=await m.run('POST','/api/login-flow',{...started.body.data,action:'save'});
+  assert.equal(r.body.data.reason,'SAVE_FAILED');
   assert.equal(m.accounts[0].token,'saved-refresh');
 });
 
@@ -326,9 +307,8 @@ test('全部同步一次就让前后账号都获得并集,读取失败账号单�
 
 test('重新读取到的刷新凭证仍已失效时不能报告更新完成或覆盖原记录',async()=>{
   const m=manager({code:402});
-  const captured=await m.run('POST','/api/capture');
-  const r=await m.run('POST','/api/accounts',{capture_id:captured.body.data.capture_id});
-  assert.equal(r.body.code,'ACCOUNT_LOGIN_EXPIRED');
+  const r=await m.run('POST','/api/login-flow',{action:'start',target_id:'target'});
+  assert.equal(r.body.data.reason,'ACCOUNT_LOGIN_EXPIRED');
   assert.equal(m.accounts[0].token,'saved-refresh');
   assert.ok(!m.calls.some(c=>c[0]==='snapshot'));
 });

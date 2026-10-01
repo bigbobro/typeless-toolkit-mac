@@ -290,22 +290,6 @@ textarea#masterArea:focus, textarea.fld:focus { border-color:var(--grn); box-sha
 select.fld { font:inherit; border:1px solid var(--line); border-radius:var(--r); padding:0 11px; height:34px; font-size:13px; width:100%; outline:none; background:var(--surf); color:var(--ink); box-shadow:var(--sh-1); transition:border-color var(--t-fast), box-shadow var(--t-fast); }
 select.fld:focus { border-color:var(--grn); box-shadow:var(--focus); }
 /* ===== 注册新账号引导:三步向导 ===== */
-.rg-step { display:flex; gap:12px; padding:13px 0; border-bottom:1px solid var(--line2); opacity:.45; transition:opacity .2s; }
-.rg-step:last-child { border-bottom:none; padding-bottom:4px; }
-.rg-step.on { opacity:1; }
-.rg-step.done { opacity:.75; }
-.rg-num { flex:none; width:22px; height:22px; border-radius:50%; background:var(--line2); border:1px solid var(--line); color:var(--mut); font-size:11.5px; font-weight:600; display:flex; align-items:center; justify-content:center; margin-top:1px; font-variant-numeric:tabular-nums; }
-.rg-step.on .rg-num { background:var(--grn); border-color:var(--grn); color:#fff; }
-.rg-step.done .rg-num { background:var(--grn-t); border-color:var(--grn-line); color:var(--grn-d); }
-.rg-body { flex:1; min-width:0; }
-.rg-title { font-size:13px; font-weight:600; }
-.rg-desc { font-size:12.5px; color:var(--mut); line-height:1.7; margin-top:4px; }
-.rg-desc b { color:var(--ink); font-weight:600; }
-.rg-act { margin-top:9px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-.rg-wait { display:none; align-items:center; gap:8px; font-size:12px; color:var(--grn-d); font-weight:600; margin-top:9px; }
-.rg-hint { display:none; font-size:12px; color:var(--amber); font-weight:600; margin-top:8px; }
-.rg-conn { display:none; align-items:center; justify-content:space-between; gap:10px; background:var(--amber-t); border:1px solid var(--amber-line); color:var(--amber); border-radius:var(--r-lg); padding:9px 12px; font-size:12.5px; margin-bottom:12px; }
-.add-reg-entry { margin-top:14px; padding-top:12px; border-top:1px solid var(--line2); font-size:12.5px; color:var(--mut); line-height:1.7; }
 
 @media (prefers-reduced-motion: reduce){
   *{ transition:none !important; animation:none !important; }
@@ -317,3 +301,11 @@ select.fld:focus { border-color:var(--grn); box-shadow:var(--focus); }
   .ustats { grid-template-columns:1fr; }
   .diag-row .dk, #syncRows .diag-row .dk { width:104px; }
 }
+
+.login-flow-modal { width:min(560px,94vw); }
+.flow-steps { font-size:12px; color:var(--mut); line-height:1.8; }
+.flow-target { font-size:13px; font-weight:600; overflow-wrap:anywhere; }
+.flow-message { font-size:14px; line-height:1.8; margin:14px 0 18px; }
+.flow-help { margin-top:18px; font-size:12.5px; line-height:1.8; color:var(--mut); }
+.flow-help summary { cursor:pointer; color:var(--ink); }
+.flow-footer { display:flex; flex-wrap:wrap; align-items:center; gap:10px; border-top:1px solid var(--line2); margin-top:20px; padding-top:14px; font-size:12px; }

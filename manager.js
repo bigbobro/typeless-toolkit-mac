@@ -9,10 +9,10 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
 
 const C = require('./lib/common');
 const { createDiagnosticLog } = require('./lib/diagnostic-log');
+const { createLoginFlow, createLoginFlowStore } = require('./lib/login-flow');
 const { createAccountRotation, createRotationStore } = require('./lib/account-rotation');
 const { createRotationNotifier } = require('./lib/rotation-notifier');
 const { makeRotationIssue, issueForError } = require('./lib/rotation-issues');
@@ -30,7 +30,7 @@ const {
   readLoginFiles, restoreLoginFiles, backupCurrentLogin,
   killTypeless, launchTypeless, resetDevice,
   readMaster, writeMaster,
-  curlApi, assertApiOk, typelessConnectionStatus, ensureApp, captureTokenCDP, startAppLogin,
+  curlApi, assertApiOk, typelessConnectionStatus, ensureApp, captureTokenCDP, readAppSession, startAppLogin,
   liveStatus, syncAccount, readAccountUsage, readActiveAccountId,
   paywallStatus, patchPaywall,
   getTypelessVersion, versionDriftStatus, writeVersionState,
@@ -46,10 +46,8 @@ const PORT = config.manager_port;
 const VERSION = JSON.parse(fs.readFileSync(path.join(C.CODE_DIR, 'package.json'), 'utf8')).version;
 const diagnostics = createDiagnosticLog({ dir: path.join(C.ROOT, 'logs'), version: VERSION });
 const security = createLocalApiSecurity({ port: PORT });
-const pendingCaptures = new Map();
-const CAPTURE_TTL_MS = 2 * 60 * 1000;
 let mutationBusy = false;
-let rotation;
+let rotation, loginFlow;
 // 首页之外允许下发的静态文件:请求路径 → Content-Type。nosniff 之下类型必须精确。
 const STATIC_ASSETS = Object.freeze({
   '/manager.css': 'text/css; charset=utf-8',
@@ -187,7 +185,7 @@ function usableRotationQuota(usage, threshold) {
 }
 
 async function rotateAccount({ fromId, settings, canProceed }) {
-  if (mutationBusy || !canProceed()) return { switched: false, message: '其他操作正在进行，本次未切换' };
+  if (mutationBusy || getLoginFlow().isActive() || !canProceed()) return { switched: false, message: '其他操作正在进行，本次未切换' };
   const issues = new Map();
   const context = account => ({ accountId: account?.user_id, accountName: account?.nickname || account?.email });
   const remember = (account, issue) => { issues.set(account.user_id, issue); return issue; };
@@ -269,7 +267,7 @@ function getRotation() {
   if (!rotation) rotation = createAccountRotation({
     store: createRotationStore(path.join(C.ROOT, 'rotation.json')),
     readAccounts, readCurrentAccountId: readActiveAccountId, readUsage: readAccountUsage,
-    isBusy: () => mutationBusy, rotate: rotateAccount, notifier: createRotationNotifier({ managerUrl: `http://127.0.0.1:${PORT}/#rotation` }),
+    isBusy: () => mutationBusy || getLoginFlow().isActive(), rotate: rotateAccount, notifier: createRotationNotifier({ managerUrl: `http://127.0.0.1:${PORT}/#rotation` }),
   });
   return rotation;
 }
@@ -321,9 +319,8 @@ function publicDictionary(data = {}) {
   };
 }
 
-function publicCapture(capture, captureId) {
+function publicCapture(capture) {
   return {
-    ...(captureId ? { capture_id: captureId } : {}),
     user_id: capture.user_id,
     nickname: capture.nickname || '',
     email: capture.email || '',
@@ -332,24 +329,42 @@ function publicCapture(capture, captureId) {
   };
 }
 
-function putPendingCapture(capture) {
-  const now = Date.now();
-  for (const [id, item] of pendingCaptures) {
-    if (item.expiresAt <= now) pendingCaptures.delete(id);
-  }
-  const id = crypto.randomBytes(18).toString('base64url');
-  pendingCaptures.set(id, { capture, expiresAt: now + CAPTURE_TTL_MS });
-  return id;
+function getLoginFlow() {
+  if (!loginFlow) loginFlow = createLoginFlow({
+    store: createLoginFlowStore(path.join(C.ROOT, 'login-flow.json')),
+    readAccounts, hasSnapshot, connect: ensureApp, readSession: readAppSession,
+    openBrowser: startAppLogin, checkLogin: inspectAccountLogin,
+    capture: async () => ({ ...await captureTokenCDP(false), snapshot: readLoginFiles() }),
+    backupCurrent: backupCurrentLogin,
+    record: diagnostics.record, bindLog: diagnostics.attachFlow,
+    saveAccount(captured, nickname) {
+      assertSafeAccountId(captured.user_id);
+      const accs = readAccounts().slice();
+      const idx = accs.findIndex(a => a.user_id === captured.user_id);
+      const meta = accountMetaFromUserInfo(captured.user_info, captured.user_id);
+      const email = captured.email || meta.email || '';
+      const rec = {
+        user_id: captured.user_id,
+        nickname: boundedText(nickname, 120, '昵称') || accs[idx]?.nickname || captured.nickname || email || meta.nickname,
+        email, role: captured.role || meta.role || '',
+        token: captured.token, captured_at: captured.captured_at,
+        added_at: idx >= 0 ? accs[idx].added_at : new Date().toISOString(),
+      };
+      if (idx >= 0) accs[idx] = rec; else accs.push(rec);
+      saveAccountWithSnapshot(accs, captured.user_id, captured.snapshot);
+      return { account: rec, existing: idx >= 0 };
+    },
+    importMaster: importMasterToAccount,
+  });
+  return loginFlow;
 }
 
-function takePendingCapture(id, consume = false) {
-  const item = pendingCaptures.get(String(id || ''));
-  if (!item || item.expiresAt <= Date.now()) {
-    if (item) pendingCaptures.delete(String(id));
-    throw new LocalApiError(400, 'CAPTURE_EXPIRED', '账号抓取结果已过期,请重新抓取');
-  }
-  if (consume) pendingCaptures.delete(String(id));
-  return item.capture;
+async function importMasterToAccount(account) {
+  const master = readMaster();
+  const have = ((await listDictionary(account.token)).words || []).map(w => w.term);
+  const missing = dictDiff(master, have);
+  const imported = await importMissingTerms(account.token, missing);
+  return { master: master.length, already: master.length - missing.length, imported };
 }
 
 const server = http.createServer((req, res) => diagnostics.withRequest(async () => {
@@ -386,8 +401,7 @@ const server = http.createServer((req, res) => diagnostics.withRequest(async () 
     }
     if (p.startsWith('/api/')) security.assertApiRequest(req);
     const operation = ({
-      'GET /api/accounts': 'refresh_accounts', 'POST /api/login/start': 'browser_login',
-      'POST /api/capture': 'capture', 'POST /api/accounts': 'save_account',
+      'GET /api/accounts': 'refresh_accounts', 'POST /api/login-flow': 'login_flow',
       'POST /api/reset-device': 'reset_device', 'POST /api/launch': 'connect',
       'POST /api/backup-restore': 'restore_backup', 'POST /api/rotation': 'rotation_settings',
     })[m + ' ' + p] || (m === 'DELETE' && /^\/api\/accounts\/[^/]+$/.test(p) ? 'remove_account'
@@ -398,8 +412,38 @@ const server = http.createServer((req, res) => diagnostics.withRequest(async () 
     }
     if (p.startsWith('/api/') && (m !== 'GET' || p === '/api/backup-export')) {
       if (mutationBusy) throw new LocalApiError(409, 'OPERATION_BUSY', '正在处理其他操作，请完成后重试');
+      if (p !== '/api/login-flow' && getLoginFlow().isActive()) {
+        throw new LocalApiError(409, 'LOGIN_FLOW_ACTIVE', '账号登录流程尚未完成，请继续或结束当前流程后再执行其他操作');
+      }
       mutationBusy = true; ownsMutation = true;
-      if (p !== '/api/rotation') rotation?.invalidate();
+      if (p !== '/api/rotation' && p !== '/api/login-flow') rotation?.invalidate();
+    }
+    if (m === 'GET' && p === '/api/login-flow') {
+      return send(res, 200, { status: 'OK', data: getLoginFlow().view() });
+    }
+    if (m === 'POST' && p === '/api/login-flow') {
+      const body = await readObjectBody(req);
+      const flow = getLoginFlow();
+      try {
+        let data;
+        if (body.action === 'start') {
+          const targetId = body.target_id == null ? null : assertSafeAccountId(body.target_id);
+          rotation?.invalidate();
+          data = await flow.start(targetId);
+        } else {
+          const wasActive = flow.isActive();
+          data = await flow.act({ ...body, nickname: boundedText(body.nickname, 120, '昵称') });
+          if (wasActive && !data.active) rotation?.invalidate();
+        }
+        return send(res, 200, { status: 'OK', data });
+      } catch (error) {
+        if (!(error instanceof LocalApiError)) throw error;
+        return send(res, error.statusCode, { status: 'FAIL', code: error.code, msg: error.message, data: flow.view() });
+      }
+    }
+    // 旧页面不能通过分散的读取/保存入口绕过流程条件。
+    if (m === 'POST' && ['/api/login/start', '/api/capture', '/api/accounts'].includes(p)) {
+      throw new LocalApiError(410, 'LOGIN_FLOW_REQUIRED', '登录流程已更新，请刷新页面，从「添加新账号」或原卡片「重新登录」继续');
     }
     if (m === 'GET' && p === '/api/rotation') return send(res, 200, { status: 'OK', data: getRotation().view() });
     if (m === 'POST' && p === '/api/rotation') {
@@ -413,10 +457,13 @@ const server = http.createServer((req, res) => diagnostics.withRequest(async () 
     if (m === 'GET' && p === '/api/accounts') {
       const accs = readAccounts();
       const data = await Promise.all(accs.map(async a => {
-        const [live, loginCheck] = await Promise.all([
-          liveStatus(a).catch(e => ({ token_valid: false, _err: e.message })),
-          inspectAccountLogin(a),
-        ]);
+        const [live, loginCheck] = getLoginFlow().isActive()
+          ? [{ _err: '登录流程进行中，完成后刷新用量和词库' }, getLoginFlow().latestCheck(a)
+            || { status: 'unknown', checked_at: null, http_status: null, api_code: null }]
+          : await Promise.all([
+            liveStatus(a).catch(e => ({ token_valid: false, _err: e.message })),
+            inspectAccountLogin(a),
+          ]);
         const has = hasSnapshot(a.user_id);   // 每个账号只探一次,下面复用
         return publicAccount(a, {
           live: publicLiveStatus(live),
@@ -487,80 +534,6 @@ const server = http.createServer((req, res) => diagnostics.withRequest(async () 
         msg: 'Typeless 当前未登录任何账号',
         data: connection,
       });
-    }
-    // 保留当前会话，通过官方浏览器入口登录另一个账号；不调用 logout 或重置设备。
-    if (m === 'POST' && p === '/api/login/start') {
-      const body = await readObjectBody(req);
-      const targetId = body.expected_user_id || null;
-      diagnostics.record('login_target', { account_id: targetId });
-      if (targetId) requireAccount(assertSafeAccountId(targetId));
-      await ensureApp();
-      await startAppLogin(current => {
-        diagnostics.record('login_current', { account_id: current?.user_id, credential: current?.refresh_token, has_current: Boolean(current) });
-        if (!current) return;
-        // 用户正在修复这个账号自身时，允许重新获取已失效/尚未保存的会话。
-        if (targetId && current.user_id === targetId) return;
-        const saved = readAccounts().find(a => a.user_id === current.user_id);
-        if (!saved || !current.refresh_token || saved.token !== current.refresh_token || !hasSnapshot(saved.user_id)) {
-          throw new LocalApiError(400, 'CURRENT_ACCOUNT_NOT_SAVED', '请先在「添加新账号」中点「我已登录，读取当前账号」，读取并保存当前账号后，再打开浏览器登录其他账号。');
-        }
-      });
-      return send(res, 200, { status: 'OK', msg: '已打开浏览器登录。请选择要添加或恢复的账号，完成后返回 Typeless，再回来读取并保存。' });
-    }
-    // 抓取当前账号(准备添加)
-    if (m === 'POST' && p === '/api/capture') {
-      try {
-        const c = await captureTokenCDP();
-        if (!c.user_id || !c.token) throw new Error('抓取结果缺少账号标识或 token');
-        const captureId = putPendingCapture(c);
-        diagnostics.record('captured', { account_id: c.user_id, credential: c.token });
-        return send(res, 200, { status: 'OK', data: publicCapture(c, captureId) });
-      }
-      catch (e) { return send(res, 500, { status: 'FAIL', msg: e.message }); }
-    }
-    // 保存账号
-    if (m === 'POST' && p === '/api/accounts') {
-      const b = await readObjectBody(req);
-      if (!b.capture_id) return send(res, 400, { status: 'FAIL', msg: '账号抓取结果缺失,请重新抓取' });
-      const captured = takePendingCapture(b.capture_id);
-      assertSafeAccountId(captured.user_id);
-      if (b.expected_user_id && b.expected_user_id !== captured.user_id) {
-        throw new LocalApiError(400, 'ACCOUNT_MISMATCH', '当前登录的不是要更新的账号,请登录原账号后重试');
-      }
-      if (readCurrentLogin()?.user_id !== captured.user_id) {
-        throw new LocalApiError(400, 'CURRENT_ACCOUNT_CHANGED', '当前登录账号已变化,请重新读取后保存');
-      }
-      const loginStatus = await checkAccountLogin(captured);
-      if (loginStatus === 'expired') {
-        throw new LocalApiError(400, 'ACCOUNT_LOGIN_EXPIRED', '读取到的登录凭证仍已失效，请通过「重新登录」中的「打开浏览器登录」完成登录，再回来读取。原记录未修改。');
-      }
-      if (loginStatus !== 'valid') {
-        throw new LocalApiError(502, 'LOGIN_CHECK_FAILED', '暂时无法确认登录凭证是否有效，请检查网络后重试。原记录未修改。');
-      }
-      let meta = accountMetaFromUserInfo(captured.user_info, captured.user_id);
-      if ((!captured.email || !captured.nickname || !captured.role) && captured.token) {
-        try {
-          const ui = await curlApi('GET', '/user/get_user_info', captured.token);
-          meta = accountMetaFromUserInfo(ui.data || captured.user_info, captured.user_id);
-        } catch (e) {}
-      }
-      const accs = readAccounts().slice();
-      const idx = accs.findIndex(x => x.user_id === captured.user_id);
-      const nickname = boundedText(b.nickname, 120, '昵称');
-      const email = boundedText(b.email, 254, '邮箱');
-      const rec = {
-        user_id: captured.user_id,
-        nickname: nickname || email || meta.nickname || (captured.user_id || '').slice(0, 8),
-        email: email || meta.email || '',
-        role: captured.role || meta.role || '',
-        token: captured.token, captured_at: captured.captured_at,
-        added_at: idx >= 0 ? accs[idx].added_at : new Date().toISOString(),
-      };
-      if (idx >= 0) accs[idx] = rec; else accs.push(rec);
-      saveAccountWithSnapshot(accs, captured.user_id);
-      diagnostics.record('saved', { account_id: captured.user_id, credential: captured.token, updated_existing: idx >= 0, account_count: accs.length });
-      takePendingCapture(b.capture_id, true);
-      return send(res, 200, { status: 'OK', data: publicAccount(rec) });
     }
     // 切换到此账号(还原快照 + 重启 Typeless)
     if (m === 'POST' && p.startsWith('/api/accounts/') && p.endsWith('/switch')) {
@@ -641,11 +614,7 @@ const server = http.createServer((req, res) => diagnostics.withRequest(async () 
     // 把主词库导入此账号(单向 master -> account,不导出)
     if (m === 'POST' && p.startsWith('/api/accounts/') && p.endsWith('/import-master')) {
       const acc = requireAccount(pathAccountId(p));
-      const master = readMaster();
-      const have = ((await listDictionary(acc.token)).words || []).map(w => w.term);
-      const missing = dictDiff(master, have);
-      const imported = await importMissingTerms(acc.token, missing);
-      return send(res, 200, { status: 'OK', data: { master: master.length, already: master.length - missing.length, imported } });
+      return send(res, 200, { status: 'OK', data: await importMasterToAccount(acc) });
     }
     // 从源账号复制词库到此账号
     if (m === 'POST' && p.startsWith('/api/accounts/') && p.includes('/copy-from/')) {
@@ -784,6 +753,7 @@ server.on('clientError', (_error, socket) => {
 function startServer() {
   server.listen(PORT, '127.0.0.1', () => {
     diagnostics.record('manager_started');
+    getLoginFlow();
     getRotation().start();
     log('[mgr] 管理器运行于 http://127.0.0.1:' + PORT);
   });

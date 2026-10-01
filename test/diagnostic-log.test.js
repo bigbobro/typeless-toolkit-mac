@@ -77,3 +77,19 @@ test('日志路径故障或符号链接不会阻断操作，也不改写或导�
   assert.doesNotMatch(JSON.stringify(log.exportLog()), /sensitive-original/);
   assert.equal(fs.readFileSync(outside, 'utf8'), 'sensitive-original');
 });
+
+test('跨请求流程标识可关联，状态原因按枚举过滤，不从消息或身份字段构造日志', async t => {
+  const { log } = fixture(t);
+  for (const reason of ['ACCOUNT_MISMATCH', 'private@example.invalid']) await log.withRequest(async () => {
+    log.begin('login_flow'); log.attachFlow('abcdabcdabcdabcd');
+    log.record('flow_state', { stage: 'waiting_login', previous_stage: 'login_required', reason,
+      target_id: 'private-account', account: { token: 'secret' }, message: 'secret' });
+    log.finish(200, { status: 'OK' });
+  });
+  const events = log.exportLog().events;
+  const states = events.filter(e => e.event === 'flow_state');
+  assert.equal(states[0].reason, 'ACCOUNT_MISMATCH'); assert.equal(states[1].reason, undefined);
+  assert.ok(states.every(e => e.flow_id === 'abcdabcdabcdabcd'));
+  assert.ok(events.filter(e => e.event === 'operation_finished').every(e => e.flow_id === 'abcdabcdabcdabcd'));
+  assert.doesNotMatch(JSON.stringify(events), /private|secret|target_id/);
+});

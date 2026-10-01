@@ -27,14 +27,14 @@ test('公开账号 DTO 使用白名单,不会序列化 token 或未知敏感字�
   assert.ok(!JSON.stringify(view).includes('secret-token'));
 });
 
-test('公开抓取 DTO 只含 capture_id 和展示字段', () => {
+test('当前登录 DTO 只含展示字段，不包含凭证或旧抓取句柄', () => {
   const view = publicCapture({
     user_id: 'u1', nickname: '甲', email: 'a@example.com', role: 'pro',
     token: 'secret-token', user_info: { secret: true }, captured_at: 'now',
-  }, 'capture-1');
+  });
 
   assert.deepStrictEqual(view, {
-    capture_id: 'capture-1', user_id: 'u1', nickname: '甲',
+    user_id: 'u1', nickname: '甲',
     email: 'a@example.com', role: 'pro', captured_at: 'now',
   });
 });

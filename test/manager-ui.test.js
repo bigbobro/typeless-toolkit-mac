@@ -14,7 +14,7 @@ function loadUi(request, { realLoad = false } = {}) {
   const element = (id) => {
     if (!elements.has(id)) elements.set(id, {
       innerHTML: '', textContent: '', style: {}, dataset: {},
-      classList: { add() {}, remove() {} }, addEventListener() {},
+      classList: { visible:false, add() { this.visible=true; }, remove() { this.visible=false; }, contains() { return this.visible; } }, addEventListener() {},
     });
     return elements.get(id);
   };
@@ -23,7 +23,7 @@ function loadUi(request, { realLoad = false } = {}) {
     window: {},
     document: { getElementById: element, addEventListener() {}, querySelectorAll: () => [] },
     fetch: async (url, options) => ({ json: async () => request(url, options) }),
-    setTimeout: (callback) => { queueMicrotask(callback); }, clearTimeout() {},
+    setTimeout: (callback, ms) => { if(ms!==3000) queueMicrotask(callback); }, clearTimeout() {},
   });
   vm.runInContext(source, ui);
   if (!realLoad) vm.runInContext('loadAccounts=async()=>{};', ui);
@@ -149,72 +149,55 @@ test('建立管理连接后重新读取账号统计,清除此前断连留下的�
   assert.equal(calls.filter(url => url === '/api/accounts').length, 1);
 });
 
-test('重新登录引导明确更新原账号,读到别的账号时不进入保存步骤', async () => {
-  const { ui, element } = loadUi(url => url === '/api/current'
-    ? { status: 'OK', data: { user_id: 'other' } }
-    : { status: 'OK', data: { user_id: 'other', capture_id: 'wrong' } });
-  vm.runInContext('ACCOUNTS=[{user_id:"target",nickname:"原账号",email:"a@example.com"}];', ui);
-  ui.addAccount('target');
-  assert.match(element('addIntro').textContent, /a@example.com/);
-  assert.match(element('addIntro').textContent, /更新原账号/);
-  assert.doesNotMatch(element('addIntro').textContent, /请先退出/);
-  await ui.doCapture();
-  assert.equal(element('addStep2').style.display, 'none');
-  assert.match(element('addError').textContent, /不是/);
+const waitingFlow = { active: true, flow_id: 'abcdabcdabcdabcd', revision: 2, stage: 'waiting_login', step: 2,
+  target_id: 'target', target: { email: 'target@example.invalid' }, message: '正在等待目标账号，当前账号不符',
+  action: { id: 'check', label: '检查登录结果' }, auto_check: true, can_reopen_browser: true };
+
+test('向导刷新恢复既有目标，错误账号只显示检测步骤，不开放保存', async () => {
+  const calls=[];
+  const {ui,element}=loadUi((url,options)=>{calls.push([url,options]);return {status:'OK',data:waitingFlow};});
+  await ui.addAccount('other');
+  assert.match(element('flowTarget').textContent,/target@example.invalid/);
+  assert.equal(element('flowIdentity').hidden,true);
+  assert.equal(element('flowPrimary').textContent,'检查登录结果');
+  assert.equal(element('loginFlowBanner').style.display,'flex');
+  assert.equal(calls.length,1); assert.equal(calls[0][0],'/api/login-flow');
+  ui.closeModal('addMask');
+  assert.equal(element('loginFlowBanner').style.display,'flex','收起不结束流程');
 });
 
-test('重新登录从浏览器入口开始，失败保留错误，不提前保存账号', async () => {
-  for (const success of [true, false]) {
-    const calls = [];
-    const { ui, element } = loadUi((url, options) => {
-      calls.push([url, options]);
-      return success ? { status: 'OK', msg: '已打开浏览器' } : { status: 'FAIL', msg: '请先保存当前账号' };
-    });
-    vm.runInContext('ACCOUNTS=[{user_id:"target",email:"target@example.com"}];', ui);
-    ui.addAccount('target');
-    await ui.startBrowserLogin();
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0][0], '/api/login/start');
-    assert.deepEqual(JSON.parse(calls[0][1].body), { expected_user_id: 'target' });
-    assert.match(element(success ? 'addLoginStatus' : 'addError').textContent, success ? /浏览器/ : /请先保存/);
-    assert.equal(element('addStep2').style.display, 'none');
-    assert.equal(vm.runInContext('BUSY', ui), false);
-  }
-});
-
-test('浏览器登录期间旧账号仍在线，注册向导等待新账号返回后才允许读取', async () => {
-  let userId = 'old';
-  const { ui, element } = loadUi(url => url === '/api/login/start'
-    ? { status: 'OK', msg: '已打开浏览器' }
-    : { status: 'OK', data: { user_id: userId } });
-  element('regMask').classList.contains = () => true;
-  vm.runInContext('ACCOUNTS=[{user_id:"old",nickname:"原账号"}];', ui);
-  await ui.startBrowserLogin(true);
-  assert.equal(element('rgStep2').className, 'rg-step on');
-  assert.equal(element('rgCapWrap').style.display, 'none');
-  userId = 'new';
-  await ui.regPoll();
-  assert.equal(element('rgStep3').className, 'rg-step on');
-  assert.equal(element('rgCapWrap').style.display, 'flex');
-});
-
-test('重新登录后保存会指定原账号,不重复添加或导入词库', async () => {
-  const calls = [];
-  const { ui, element } = loadUi((url, options) => {
-    calls.push({ url, body: options?.body && JSON.parse(options.body) });
-    if (url === '/api/accounts') return { status: 'OK' };
-    return { status: 'OK', data: { user_id: 'target', email: 'a@example.com', capture_id: 'fresh-capture' } };
+test('服务端决定下一步；过期标签页返回新状态，不重复保存', async () => {
+  const calls=[];
+  const confirm={...waitingFlow,stage:'confirm',revision:4,action:{id:'save',label:'确认并更新原账号'},account:{email:'target@example.invalid',nickname:'原昵称'}};
+  const {ui,element}=loadUi((url,options)=>{
+    calls.push([url,options]);
+    return options?.method==='POST'?{status:'FAIL',code:'LOGIN_FLOW_CHANGED',msg:'流程状态已更新',data:waitingFlow}:{status:'OK',data:confirm};
   });
-  ui.detectCurrent = async () => {};
-  vm.runInContext('ACCOUNTS=[{user_id:"target",nickname:"原昵称",email:"a@example.com"}];', ui);
-  ui.addAccount('target');
-  await ui.doCapture();
-  assert.equal(element('addSaveBtn').textContent, '更新原账号');
-  await ui.saveAccount();
-  const save = calls.find(c => c.url === '/api/accounts');
-  assert.equal(save.body.expected_user_id, 'target');
-  assert.equal(save.body.nickname, '原昵称');
-  assert.ok(!calls.some(c => c.url.includes('import-master')));
+  await ui.addAccount('target');
+  assert.equal(element('flowIdentity').hidden,false);
+  assert.equal(element('addNick').value,'原昵称');
+  await ui.loginFlowAction();
+  const body=JSON.parse(calls[1][1].body);
+  assert.equal(body.action,'save'); assert.equal(body.revision,4); assert.equal(body.nickname,'原昵称');
+  assert.equal(element('flowIdentity').hidden,true);
+  assert.match(element('addError').textContent,/状态已更新/);
+  assert.equal(calls.length,2);
+});
+
+test('保存响应丢失后先回读流程，呈现已保存待校验，不重发保存', async () => {
+  const calls=[];
+  const confirm={...waitingFlow,stage:'confirm',action:{id:'save',label:'保存账号'},account:{email:'target@example.invalid'}};
+  const retry={...waitingFlow,stage:'retry',saved:true,auto_check:false,message:'已保存，请重试校验',action:{id:'retry',label:'重试结果校验'}};
+  const {ui,element}=loadUi((url,options)=>{
+    calls.push(options?.method||'GET');
+    if(options?.method==='POST') throw Error('连接断开');
+    return {status:'OK',data:calls.length===1?confirm:retry};
+  });
+  await ui.addAccount(); await ui.loginFlowAction();
+  assert.deepEqual(calls,['GET','POST','GET']);
+  assert.equal(element('flowPrimary').textContent,'重试结果校验');
+  assert.match(element('flowMessage').textContent,/已保存/);
+  assert.equal(element('flowPrimary').disabled,false);
 });
 
 test('诊断请求断开后显示原因,下一次检查仍会发出请求', async () => {
@@ -296,26 +279,18 @@ test('账号加载断网结束占位并给出常驻重试,已有账号不会消�
   assert.match(element('grid').innerHTML, /保留账号/);
 });
 
-test('读取结果过期后回到读取步骤,不困在无法保存的表单', async () => {
-  const { ui, element } = loadUi(url => url === '/api/accounts'
-    ? { status: 'FAIL', code: 'CAPTURE_EXPIRED', msg: '读取结果已过期,请重新读取' }
-    : { status: 'OK', data: { user_id: 'target', capture_id: 'expired', email: 'a@example.com' } });
-  ui.addAccount(); await ui.doCapture(); await ui.saveAccount();
-  assert.equal(element('addStep1').style.display, 'block');
-  assert.equal(element('addStep2').style.display, 'none');
-  assert.match(element('addError').textContent, /重新读取/);
-});
-
-test('保存成功后词库导入和列表刷新断网,已保存账号仍显示且说明导入未完成', async () => {
-  const { ui, element } = loadUi((url, options) => {
-    if(url === '/api/accounts' && options?.method === 'POST') return { status: 'OK', data: { user_id:'target', nickname:'已保存账号' } };
-    if(url === '/api/accounts' || url.includes('import-master')) throw new Error('连接断开');
-    return { status: 'OK', data: { user_id:'target', capture_id:'capture', nickname:'已保存账号', email:'a@example.com' } };
-  }, { realLoad: true });
-  ui.detectCurrent = async () => {};
-  ui.addAccount(); await ui.doCapture(); await ui.saveAccount();
-  assert.match(element('grid').innerHTML, /已保存账号/);
-  assert.match(element('operationMsg').textContent, /已添加.*词库导入/);
+test('确认过期回到检测；词库导入失败单独说明，校验成功由完成按钮收尾', async () => {
+  let result={...waitingFlow,stage:'retry',auto_check:false,message:'确认已过期，请重新检测',action:{id:'retry',label:'重试当前步骤'}};
+  const {ui,element}=loadUi(()=>({status:'OK',data:result}));
+  await ui.addAccount();
+  assert.equal(element('flowIdentity').hidden,true);
+  assert.equal(element('flowPrimary').textContent,'重试当前步骤');
+  result={...waitingFlow,stage:'done',active:false,auto_check:false,message:'账号已保存并校验，词库导入未完成',sync_warning:true,action:{id:'finish',label:'完成'}};
+  await ui.resumeLoginFlow();
+  ui.detectCurrent=async()=>{};ui.loadRotationStatus=async()=>{};
+  await ui.loginFlowAction();
+  assert.match(element('operationMsg').textContent,/已保存并校验.*词库导入未完成/);
+  assert.equal(element('addMask').classList.contains('on'),false);
 });
 
 test('备份请求断开时不能误报文件格式错误,词库写入断开也有失败提示', async () => {
