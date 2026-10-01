@@ -29,7 +29,7 @@ const {
   readLoginFiles, restoreLoginFiles, backupCurrentLogin,
   killTypeless, launchTypeless, resetDevice,
   readMaster, writeMaster,
-  curlApi, assertApiOk, typelessConnectionStatus, ensureApp, captureTokenCDP,
+  curlApi, assertApiOk, typelessConnectionStatus, ensureApp, captureTokenCDP, startAppLogin,
   liveStatus, syncAccount, readAccountUsage, readActiveAccountId,
   paywallStatus, patchPaywall,
   getTypelessVersion, versionDriftStatus, writeVersionState,
@@ -144,7 +144,7 @@ async function switchSavedAccount(id, beforeSwitch = async () => {}) {
       if (previousId) await verifyCurrentLogin(previousId);
     } catch (rollback) {
       keepRecovery = true;
-      throw new LocalApiError(500, 'SWITCH_RECOVERY_REQUIRED', '切换失败，原登录态也未能确认恢复。请在 Typeless 重新登录，再通过「添加当前账号」更新原记录。切换前备份保留在 '+recoveryDir+'。'+rollback.message);
+      throw new LocalApiError(500, 'SWITCH_RECOVERY_REQUIRED', '切换失败，原登录态也未能确认恢复。请通过对应账号的「重新登录」更新原记录。切换前备份保留在 '+recoveryDir+'。'+rollback.message);
     }
     throw new LocalApiError(500, 'SWITCH_ROLLED_BACK', '切换失败，已恢复切换前的登录状态。请更新目标账号的登录后重试。'+error.message);
   } finally {
@@ -444,6 +444,23 @@ const server = http.createServer(async (req, res) => {
         data: connection,
       });
     }
+    // 保留当前会话，通过官方浏览器入口登录另一个账号；不调用 logout 或重置设备。
+    if (m === 'POST' && p === '/api/login/start') {
+      const body = await readObjectBody(req);
+      const targetId = body.expected_user_id || null;
+      if (targetId) requireAccount(assertSafeAccountId(targetId));
+      await ensureApp();
+      await startAppLogin(current => {
+        if (!current) return;
+        // 用户正在修复这个账号自身时，允许重新获取已失效/尚未保存的会话。
+        if (targetId && current.user_id === targetId) return;
+        const saved = readAccounts().find(a => a.user_id === current.user_id);
+        if (!saved || !current.refresh_token || saved.token !== current.refresh_token || !hasSnapshot(saved.user_id)) {
+          throw new LocalApiError(400, 'CURRENT_ACCOUNT_NOT_SAVED', '请先在「添加新账号」中点「我已登录，读取当前账号」，读取并保存当前账号后，再打开浏览器登录其他账号。');
+        }
+      });
+      return send(res, 200, { status: 'OK', msg: '已打开浏览器登录。请选择要添加或恢复的账号，完成后返回 Typeless，再回来读取并保存。' });
+    }
     // 抓取当前账号(准备添加)
     if (m === 'POST' && p === '/api/capture') {
       try {
@@ -468,7 +485,7 @@ const server = http.createServer(async (req, res) => {
       }
       const loginStatus = await checkAccountLogin(captured);
       if (loginStatus === 'expired') {
-        throw new LocalApiError(400, 'ACCOUNT_LOGIN_EXPIRED', '读取到的登录凭证仍已失效，请在 Typeless 退出并重新登录，再回来读取。原记录未修改。');
+        throw new LocalApiError(400, 'ACCOUNT_LOGIN_EXPIRED', '读取到的登录凭证仍已失效，请通过「重新登录」中的「打开浏览器登录」完成登录，再回来读取。原记录未修改。');
       }
       if (loginStatus !== 'valid') {
         throw new LocalApiError(502, 'LOGIN_CHECK_FAILED', '暂时无法确认登录凭证是否有效，请检查网络后重试。原记录未修改。');

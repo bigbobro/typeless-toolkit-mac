@@ -138,9 +138,45 @@ test('重新登录引导明确更新原账号,读到别的账号时不进入保�
   ui.addAccount('target');
   assert.match(element('addIntro').textContent, /a@example.com/);
   assert.match(element('addIntro').textContent, /更新原账号/);
+  assert.doesNotMatch(element('addIntro').textContent, /请先退出/);
   await ui.doCapture();
   assert.equal(element('addStep2').style.display, 'none');
   assert.match(element('addError').textContent, /不是/);
+});
+
+test('重新登录从浏览器入口开始，失败保留错误，不提前保存账号', async () => {
+  for (const success of [true, false]) {
+    const calls = [];
+    const { ui, element } = loadUi((url, options) => {
+      calls.push([url, options]);
+      return success ? { status: 'OK', msg: '已打开浏览器' } : { status: 'FAIL', msg: '请先保存当前账号' };
+    });
+    vm.runInContext('ACCOUNTS=[{user_id:"target",email:"target@example.com"}];', ui);
+    ui.addAccount('target');
+    await ui.startBrowserLogin();
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0][0], '/api/login/start');
+    assert.deepEqual(JSON.parse(calls[0][1].body), { expected_user_id: 'target' });
+    assert.match(element(success ? 'addLoginStatus' : 'addError').textContent, success ? /浏览器/ : /请先保存/);
+    assert.equal(element('addStep2').style.display, 'none');
+    assert.equal(vm.runInContext('BUSY', ui), false);
+  }
+});
+
+test('浏览器登录期间旧账号仍在线，注册向导等待新账号返回后才允许读取', async () => {
+  let userId = 'old';
+  const { ui, element } = loadUi(url => url === '/api/login/start'
+    ? { status: 'OK', msg: '已打开浏览器' }
+    : { status: 'OK', data: { user_id: userId } });
+  element('regMask').classList.contains = () => true;
+  vm.runInContext('ACCOUNTS=[{user_id:"old",nickname:"原账号"}];', ui);
+  await ui.startBrowserLogin(true);
+  assert.equal(element('rgStep2').className, 'rg-step on');
+  assert.equal(element('rgCapWrap').style.display, 'none');
+  userId = 'new';
+  await ui.regPoll();
+  assert.equal(element('rgStep3').className, 'rg-step on');
+  assert.equal(element('rgCapWrap').style.display, 'flex');
 });
 
 test('重新登录后保存会指定原账号,不重复添加或导入词库', async () => {

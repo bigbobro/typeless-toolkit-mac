@@ -64,6 +64,46 @@ function manager(refresh, verified = true, overrides = {}) {
   };
 }
 
+test('浏览器登录入口只接受已保存的当前会话，不修改七个账号的凭证', async () => {
+  const accounts = Array.from({ length: 7 }, (_, i) => ({ user_id: `u${i}`, token: `saved-${i}` }));
+  for (const mode of ['saved', 'missing', 'stale', 'no-snapshot', 'logged-out']) {
+    let opened = false;
+    const m = manager({}, true, {
+      readAccounts: () => accounts,
+      ensureApp: async () => {},
+      hasSnapshot: () => mode !== 'no-snapshot',
+      startAppLogin: async check => {
+        await check(mode === 'logged-out' ? null : {
+          user_id: mode === 'missing' ? 'unsaved' : 'u0',
+          refresh_token: mode === 'stale' ? 'new-session' : 'saved-0',
+        });
+        opened = true;
+      },
+    });
+    const before = JSON.stringify(accounts);
+    const result = await m.run('POST', '/api/login/start', {});
+    const allowed = mode === 'saved' || mode === 'logged-out';
+    assert.equal(result.body.status, allowed ? 'OK' : 'FAIL', mode);
+    assert.doesNotMatch(JSON.stringify(result.body), /saved-0|new-session/);
+    assert.equal(opened, allowed, mode);
+    if (!allowed) assert.match(result.body.msg, /保存当前账号/);
+    assert.equal(JSON.stringify(accounts), before);
+    assert.deepEqual(m.calls, [], '不退出应用、不覆盖快照、不更新其他账号');
+  }
+});
+
+test('正在重新登录当前账号时允许替换旧会话，不能借此绕过其他账号的保存检查', async () => {
+  for (const id of ['target', 'other']) {
+    const m = manager({}, true, {
+      ensureApp: async () => {},
+      startAppLogin: async check => check({ user_id: 'target', refresh_token: 'changed' }),
+    });
+    const result = await m.run('POST', '/api/login/start', { expected_user_id: id });
+    assert.equal(result.body.status, id === 'target' ? 'OK' : 'FAIL');
+    assert.equal(m.accounts[0].token, 'saved-refresh');
+  }
+});
+
 test('列表区分服务器拒绝的登录凭证和网络异常,不依赖资料接口或 JWT 剩余天数', async () => {
   for (const [response, expected] of [[{ code: 402 }, 'expired'], [{ access_token: 'access' }, 'valid'], [{ _error: 'non-json' }, 'unknown']]) {
     const m = manager(response);

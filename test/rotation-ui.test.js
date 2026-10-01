@@ -146,7 +146,7 @@ test('轮动异常、候选原因与账号名安全呈现，最近结果和通�
   const html = element('rotationIssues').innerHTML;
   assert.match(html, /连接 Typeless/);
   assert.match(html, /更新登录/);
-  assert.match(html, /请先在 Typeless 登录/);
+  assert.match(html, /通过浏览器登录/);
   assert.match(html, /&lt;script&gt;/);
   assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
   assert.doesNotMatch(html, /<img|<script>/);
@@ -190,7 +190,7 @@ test('更新指定账号登录沿用现有引导，先登录提示和目标账�
   } }).data);
   await ui.recoverRotationIssue(1);
   assert.equal(vm.runInContext('ADD_TARGET_ID', ui), 'target');
-  assert.match(element('addIntro').textContent, /先在 Typeless 登录.*test@example.com/);
+  assert.match(element('addIntro').textContent, /打开浏览器登录.*test@example.com/);
   assert.deepEqual(requests.map(r => r.url), ['/api/rotation']);
 });
 

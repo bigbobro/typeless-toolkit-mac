@@ -52,7 +52,7 @@
 
   <div class="toolbar">
     <button class="btn primary" id="launchBtn" data-tip="连接 Typeless，读取账号状态、额度和词库" onclick="launch()">⏻ 连接 Typeless</button>
-    <button class="btn" data-tip="读取当前登录账号的凭证；已存在的账号会更新原记录" onclick="addAccount()">＋ 添加当前账号</button>
+    <button class="btn" data-tip="登录其他账号，或读取已在 Typeless 登录的账号" onclick="addAccount()">＋ 添加新账号</button>
     <button class="btn" data-tip="重新拉取所有账号的用量、词库数、token 状态" onclick="loadAccounts()">↻ 全部刷新</button>
     <button class="btn" id="btnSyncAll" data-tip="所有账号词库互相补齐，并汇总进主词库" onclick="syncAll()">⇄ 全部同步</button>
     <button class="btn" data-tip="编辑作为同步基准的主词库（一行一个词）" onclick="openMaster()">✎ 主词库编辑</button>
@@ -157,22 +157,24 @@
 <!-- 添加账号 -->
 <div class="mask" id="addMask" onclick="if(event.target===this)closeModal('addMask')">
   <div class="modal" style="width:min(440px,94vw)">
-    <div class="hd"><h3 id="addTitle">添加账号</h3><button class="btn small" data-tr data-tip="关闭" onclick="closeModal('addMask')">✕</button></div>
+    <div class="hd"><h3 id="addTitle">添加新账号</h3><button class="btn small" data-tr data-tip="关闭" onclick="closeModal('addMask')">✕</button></div>
     <div class="bd">
       <div id="addStep1">
         <div id="addIntro" class="recovery-note"></div>
         <button class="btn" onclick="launch()">连接 Typeless</button>
+        <button class="btn" id="addLoginBtn" onclick="startBrowserLogin()">打开浏览器登录</button>
+        <div id="addLoginStatus" class="recovery-note" role="status"></div>
         <button class="btn primary" data-tl data-tip="读取 Typeless 当前登录账号的凭证" onclick="doCapture()" id="capBtn">我已登录，读取当前账号</button>
         <div class="add-reg-entry" id="addRegEntry">
-          还没有可添加的新账号？需要先在 Typeless 里登出、注册并登录一个新账号，再回来抓取。
-          <div style="margin-top:8px;"><button class="btn small" data-tl data-tip="分步引导：登出 / 解除设备限制 → 注册并登录 → 自动检测并抓取" onclick="closeModal('addMask');openRegGuide()">→ 注册新账号引导</button></div>
+          还没有可添加的新账号？可通过引导在浏览器注册并登录，返回 Typeless 后读取保存。
+          <div style="margin-top:8px;"><button class="btn small" data-tl data-tip="打开浏览器登录 → 返回 Typeless → 读取保存" onclick="closeModal('addMask');openRegGuide()">→ 注册新账号引导</button></div>
         </div>
       </div>
       <div id="addStep2" style="display:none">
         <div class="field"><label>昵称</label><input class="fld" id="addNick"></div>
         <div class="field"><label>邮箱</label><input class="fld" id="addEmail" readonly></div>
         <div class="field"><label>套餐</label><input class="fld" id="addMeta" readonly></div>
-        <button class="btn primary" id="addSaveBtn" data-tl data-tip="保存登录凭证和快照；同一账号会更新原记录" onclick="saveAccount()">保存</button>
+        <button class="btn primary" id="addSaveBtn" data-tl data-tip="保存登录凭证和快照；同一账号会更新原记录" onclick="saveAccount()">保存账号</button>
         <button class="btn" onclick="addAccount(ADD_TARGET_ID)">返回重新读取</button>
         <span id="addExist" style="font-size:12px;color:var(--amber);margin-left:10px;"></span>
       </div>
@@ -190,17 +192,19 @@
       <div class="rg-step" id="rgStep1">
         <div class="rg-num" id="rgNum1">1</div>
         <div class="rg-body">
-          <div class="rg-title">让 Typeless 回到登录页</div>
-          <div class="rg-desc">在 Typeless 里登出当前账号（设置 → Sign out）。如果之后注册新账号时被<b>设备限制</b>拦住，再回来点「解除设备限制」重置设备 ID——切回需要完整快照和仍有效的登录凭证，否则需重新登录。</div>
+          <div class="rg-title">打开浏览器登录</div>
+          <div class="rg-desc">先在管理器读取并保存当前账号，再点下方按钮。不要在 Typeless 点「退出登录」，这会撤销当前账号的已保存凭证。只有 Typeless 明确提示设备限制时，才使用「解除设备限制」。</div>
           <div class="rg-hint" id="rgHint1"></div>
-          <div class="rg-act"><button class="btn small danger" data-tl data-tip="重置设备并登出；切回需要完整快照和有效凭证" onclick="resetDevice()">⊘ 解除设备限制</button></div>
+          <div class="rg-act"><button class="btn small primary" id="rgLoginBtn" onclick="startBrowserLogin(true)">打开浏览器登录</button></div>
+          <div id="rgLoginStatus" class="recovery-note" role="status"></div>
+          <div id="rgError" class="recovery-error" role="alert"></div>
         </div>
       </div>
       <div class="rg-step" id="rgStep2">
         <div class="rg-num" id="rgNum2">2</div>
         <div class="rg-body">
-          <div class="rg-title">在 Typeless 注册并登录新账号</div>
-          <div class="rg-desc">在 Typeless 登录页选择注册（Sign up），用一个新邮箱完成注册并登录。登录成功后这里会自动检测到。</div>
+          <div class="rg-title">在浏览器注册或登录新账号，再返回 Typeless</div>
+          <div class="rg-desc">在浏览器选择登录方式，确认使用的是新账号。完成后允许浏览器打开 Typeless；桌面端接收登录后，这里会自动检测到。</div>
           <div class="rg-wait" id="rgWait"><span class="spin"></span><span>正在等待检测新账号登录…</span></div>
         </div>
       </div>
