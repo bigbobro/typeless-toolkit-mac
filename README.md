@@ -2,7 +2,7 @@
 
 [![test](https://github.com/bigbobro/typeless-toolkit-mac/actions/workflows/test.yml/badge.svg)](https://github.com/bigbobro/typeless-toolkit-mac/actions/workflows/test.yml)
 
-当前版本：[v2.9.6](https://github.com/bigbobro/typeless-toolkit-mac/releases/tag/macos-v2.9.6)。运行中的工具版本显示在管理器页面标题旁。
+当前版本：[v2.9.7](https://github.com/bigbobro/typeless-toolkit-mac/releases/tag/macos-v2.9.7)。运行中的工具版本显示在管理器页面标题旁。
 
 给 **macOS 上的 Typeless** 用的本机管理器：把多个账号收在一个页面里，切号、对齐词库、处理设备限制、去掉升级/会员弹窗。数据只留在本机，打开浏览器操作，不用注册云端、也不用 `npm install`。
 
@@ -154,7 +154,7 @@ lsof -nP -iTCP:9222 -sTCP:LISTEN
 1. 各账号导出 → 合并进 `Typeless词库主清单.csv`
 2. 主词库缺的词再导回各账号
 
-「全部同步」先读取所有账号并汇总主词库，再给各个读取成功的账号补齐同一份并集，一次操作即可对齐。读取或导入失败的账号会单独列出，其他账号继续处理；完成后显示成功 / 失败数量。
+「全部同步」先读取所有账号并汇总主词库，再给各个读取成功的账号补齐同一份并集，一次操作即可对齐。读取或导入失败的账号会单独列出，其他账号继续处理；完成后显示成功 / 失败数量。**它只动词库**——不切换账号、不改登录态，所以在工具栏里归在「词库」组，而不是账号操作那一行。
 
 > [!WARNING]
 > **删词只删单个账号的云端，不删主词库。** 因为同步只增不删，只要还有**任何一个**账号持有这个词，下次同步就会把它并回主词库、再发回所有账号。要永久删掉一个词，得在**所有持有它的账号**里都删一遍，**再**到「✎ 主词库编辑」删掉那一行。
@@ -237,7 +237,7 @@ node typeless-dict-sync.js
 }
 ```
 
-常用键：`typeless_app`、`cdp_port`（默认 9222）、`manager_port`（默认 7788）、`api_base`、`paywall`（自动探测失败再手工填）。
+常用键：`typeless_app`、`cdp_port`（默认 9222）、`manager_port`（默认 7788）、`api_base`、`paywall`（自动探测失败再手工填）、`skip_onboarding`（跳过初始引导，由工具栏开关写入）。
 
 想知道工具实际探测到了哪个 `app.asar`、哪个数据目录，点工具栏的 **◇ 诊断** —— 它是只读的，会把路径、端口、账号数、数据目录一次列出来。
 
@@ -261,7 +261,7 @@ Keychain 与路径整理参考 [typeless-reset-device](https://github.com/estarp
 
 ## 去升级 / 会员弹窗
 
-「解除弹窗提示」会改 Typeless.app 内文件：先在 `patch-backups/` 做绑定当前版本与 SHA-256 的事务备份 → 等长替换 paywall 相关分支 → 更新 asar 与 Info.plist 完整性 → ad-hoc codesign 并校验 → 重启。
+「解除弹窗」会改 Typeless.app 内文件：先在 `patch-backups/` 做绑定当前版本与 SHA-256 的事务备份 → 等长替换 paywall 相关分支 → 更新 asar 与 Info.plist 完整性 → ad-hoc codesign 并校验 → 重启。
 
 - Typeless **自动更新**可能冲掉补丁，需要再打一次；页面上的版本漂移提示就是为这类情况准备的  
 - 任一步失败按**本次** before-image 回滚  
@@ -277,6 +277,22 @@ cp "$BACKUP/Info.plist" /Applications/Typeless.app/Contents/Info.plist
 codesign --force --deep --sign - /Applications/Typeless.app
 codesign --verify --deep --strict /Applications/Typeless.app
 ```
+
+---
+
+## 跳过初始引导
+
+Typeless 首次使用（以及每加一个新账号）会走一段 20 多步的引导：权限、麦克风测试、听写/翻译/问答的示例演练。工具栏「⇥ 跳过引导」是个**开关**，开启后：
+
+- 当前这份立即标记为已完成，Typeless 重启后直接进主界面；
+- 之后**保存的账号快照**都会带上「已完成」，所以新加的账号也开箱即用；
+- 每次**切号还原**时如果快照里还是未完成状态，会就地纠正。
+
+为什么必须做成开关而不是一次性按钮：引导状态存在 `app-onboarding.json`，而它属于账号快照三件套（`app-storage.json` / `user-data.json` / `app-onboarding.json`）之一。只改「当前那份」，换个号就被旧快照覆盖回来；新账号更是 Typeless 全新生成的一份。
+
+- 开关写在稳定数据目录的 `config.local.json`（`"skip_onboarding": true`），关闭时删掉该键、不留 `false` 残留
+- 只改 `isCompleted` / `onboardingStep` / `onboardingMaxReachedStep` 三个字段，迁移标记、订阅提示、首次点击记录等原样保留
+- 关闭开关**不会**把已保存的快照改回去；想重新看引导，需手动删掉 `app-onboarding.json`
 
 ---
 

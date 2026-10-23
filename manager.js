@@ -38,6 +38,7 @@ const {
   termKey, safeCount, assertSafeAccountId,
   DICT_LIST_PATH, listDictionary, dictDiff, importMissingTerms,
   readCurrentLogin, verifyCurrentLogin,
+  readOnboardingState, skipOnboarding, onboardingPolicy, setOnboardingPolicy, portUp,
   log, sleep,
 } = C;
 
@@ -567,6 +568,48 @@ const server = http.createServer((req, res) => diagnostics.withRequest(async () 
     // 查询去弹窗补丁状态(只读)
     if (m === 'GET' && p === '/api/paywall-status') {
       return send(res, 200, { status: 'OK', data: paywallStatus() });
+    }
+    // 跳过引导:一个全局开关 + 当前状态。
+    // 开关开启后,保存账号快照与切号还原都会写入 isCompleted,新加的账号也开箱即用。
+    if (m === 'GET' && p === '/api/onboarding') {
+      let policy;
+      try { policy = onboardingPolicy(); }
+      catch (error) { throw new LocalApiError(500, 'CONFIG_INVALID', error.message); }
+      return send(res, 200, {
+        status: 'OK',
+        data: { ...readOnboardingState(), enabled: policy.enabled },
+      });
+    }
+    if (m === 'POST' && p === '/api/onboarding') {
+      const body = await readObjectBody(req);
+      if (typeof body.enabled !== 'boolean') {
+        throw new LocalApiError(400, 'INVALID_INPUT', 'enabled 必须是布尔值');
+      }
+      let policy;
+      try { policy = setOnboardingPolicy(body.enabled); }
+      catch (error) { throw new LocalApiError(500, 'CONFIG_SAVE_FAILED', error.message); }
+      // 打开时顺手把"当前这份"也刷了,否则用户还得再点一次才看到效果。
+      // 历史快照不在这里批量改写:还原路径(setOnboardingPolicy 之后每次切号)
+      // 会就地纠正,没必要提前动别人的 profiles/。
+      let result = { changed: false };
+      if (policy.enabled) {
+        const dataBackup = backupRuntimeData('skip-onboarding');
+        result = skipOnboarding();
+        result.manager_data_backup = dataBackup;
+        // Typeless 只在启动时读引导状态;正在运行时重启,否则改了不生效。
+        if (result.changed && await portUp()) {
+          await killTypeless(); await sleep(1500);
+          launchTypeless(); result.restarted = true;
+        }
+      }
+      return send(res, 200, {
+        status: 'OK',
+        data: { ...result, enabled: policy.enabled, ...readOnboardingState() },
+        msg: policy.enabled
+          ? (result.restarted ? '已开启：跳过引导，Typeless 正在重启'
+            : (result.changed ? '已开启：跳过引导，下次启动 Typeless 生效' : '已开启：跳过引导'))
+          : '已关闭：跳过引导（已保存的账号快照保持现状）',
+      });
     }
     // Typeless 版本漂移状态(只读:当前版本 vs 上次见过的版本)
     if (m === 'GET' && p === '/api/version-status') {

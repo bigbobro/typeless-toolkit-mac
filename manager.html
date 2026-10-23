@@ -52,16 +52,28 @@
   </section>
 
   <div class="toolbar">
-    <button class="btn primary" id="launchBtn" data-tip="连接 Typeless，读取账号状态、额度和词库" onclick="launch()">⏻ 连接 Typeless</button>
-    <button class="btn" data-tip="登录其他账号，或读取已在 Typeless 登录的账号" onclick="addAccount()">＋ 添加新账号</button>
-    <button class="btn" data-tip="重新拉取所有账号的用量、词库数、token 状态" onclick="loadAccounts()">↻ 全部刷新</button>
-    <button class="btn" id="btnSyncAll" data-tip="所有账号词库互相补齐，并汇总进主词库" onclick="syncAll()">⇄ 全部同步</button>
-    <button class="btn" data-tip="编辑作为同步基准的主词库（一行一个词）" onclick="openMaster()">✎ 主词库编辑</button>
-    <button class="btn" id="btnExportDictionary" data-tip="将已保存的主词库下载为单列 CSV，一行一个词" onclick="exportDictionary()">↓ 导出词库</button>
-    <button class="btn" data-tip="体检：Typeless 路径 / 调试端口 / 当前登录 / 补丁状态 / 数据目录一览" onclick="openDiag()">◇ 诊断</button>
-    <span class="sep"></span>
-    <button class="btn danger" id="btnResetDevice" data-tip="重置设备并登出；切回需要完整快照和有效凭证" onclick="resetDevice()">⊘ 解除设备限制</button>
-    <button class="btn danger" id="btnPatchPaywall" data-tr data-tip="给 Typeless 打补丁去掉升级/会员弹窗；App 自动更新后需重打" onclick="patchPaywall()">⊘ 解除弹窗提示</button>
+    <div class="toolbar-row primary-row">
+      <button class="btn primary" id="launchBtn" data-tip="连接 Typeless，读取账号状态、额度和词库" onclick="launch()">⏻ 连接 Typeless</button>
+      <button class="btn" data-tip="登录其他账号，或读取已在 Typeless 登录的账号" onclick="addAccount()">＋ 添加新账号</button>
+      <button class="btn" data-tip="重新拉取所有账号的用量、词库数、token 状态" onclick="loadAccounts()">↻ 全部刷新</button>
+    </div>
+    <div class="toolbar-row secondary-row">
+      <div class="toolbar-group">
+        <span class="toolbar-label">词库</span>
+        <button class="btn small" id="btnSyncAll" data-tip="各账号词库互相补齐，并汇总进主词库（只动词库，不切换账号）" onclick="syncAll()">⇄ 全部同步</button>
+        <button class="btn small" data-tip="编辑作为同步基准的主词库（一行一个词）" onclick="openMaster()">✎ 主词库编辑</button>
+        <button class="btn small" id="btnExportDictionary" data-tip="将已保存的主词库下载为单列 CSV，一行一个词" onclick="exportDictionary()">↓ 导出词库</button>
+      </div>
+      <div class="toolbar-group">
+        <span class="toolbar-label">客户端</span>
+        <button class="btn small" data-tip="体检：Typeless 路径 / 调试端口 / 当前登录 / 补丁状态 / 数据目录一览" onclick="openDiag()">◇ 诊断</button>
+        <button class="btn small toggle" id="btnSkipOnboarding" aria-pressed="false"
+                data-tip="开启后保存账号与切号都跳过初始引导；新加的账号也直接进主界面"
+                onclick="toggleSkipOnboarding()">⇥ 跳过引导</button>
+        <button class="btn small danger" id="btnPatchPaywall" data-tr data-tip="给 Typeless 打补丁去掉升级/会员弹窗；App 自动更新后需重打" onclick="patchPaywall()">⊘ 解除弹窗</button>
+        <button class="btn small danger" id="btnResetDevice" data-tip="重置设备并登出；切回需要完整快照和有效凭证" onclick="resetDevice()">⊘ 解除设备限制</button>
+      </div>
+    </div>
   </div>
 
   <div id="operationResult" class="banner" role="status" style="display:none"><span id="operationMsg"></span><button class="btn small" onclick="this.parentElement.style.display='none'">知道了</button></div>
@@ -181,7 +193,7 @@
       <div class="flow-footer">
         <button class="btn small" id="flowCancel" onclick="loginFlowAction('cancel')" hidden>结束本次流程</button>
         <button class="btn small" onclick="exportDiagnosticLog()">导出排查日志</button>
-        <a href="https://github.com/bigbobro/typeless-toolkit-mac/blob/macos-v2.9.6/LOGIN-RECOVERY.md" target="_blank" rel="noopener noreferrer">使用指引</a>
+        <a href="https://github.com/bigbobro/typeless-toolkit-mac/blob/macos-v2.9.7/LOGIN-RECOVERY.md" target="_blank" rel="noopener noreferrer">使用指引</a>
       </div>
       <p class="recovery-note">收起页面后可从顶部继续；流程未结束时，账号轮动会等待。</p>
     </div>

@@ -695,6 +695,61 @@ async function switchTo(id){
     toast('切换失败: '+e.message,'err');
   } finally { setBusy(false); }
 }
+// 跳过引导是一个**全局开关**,不是一个一次性动作。
+// 原因:引导状态(app-onboarding.json)属于账号快照三件套之一,只改"当前那份"的话,
+// 换个号就被旧快照覆盖回来,新加的账号更是官方全新生成的一份。开关打开后,
+// 保存快照(含新增账号)与切号还原都会把引导置为已完成(见 lib/common.js)。
+function renderSkipOnboarding(enabled){
+  const btn=document.getElementById('btnSkipOnboarding');
+  if(!btn) return;
+  btn.setAttribute('aria-pressed', enabled?'true':'false');
+  btn.textContent= enabled?'⇥ 已跳过引导':'⇥ 跳过引导';
+  btn.dataset.tip= enabled
+    ? '已开启:保存账号与切号都会跳过初始引导；再次点击关闭'
+    : '开启后保存账号与切号都跳过初始引导；新加的账号也直接进主界面';
+}
+async function loadOnboardingPolicy(){
+  try{
+    const r=await api('/api/onboarding');
+    if(r.status==='OK') renderSkipOnboarding(r.data?.enabled===true);
+  }catch(e){}
+}
+async function toggleSkipOnboarding(){
+  if(BUSY) return;
+  let state=null;
+  try{
+    const r=await api('/api/onboarding');
+    if(r.status==='OK') state=r.data;
+  }catch(e){}
+  const enabled=state?.enabled===true;
+  if(!enabled){
+    const where=state?.exists?`当前这份停在「${state.step||'未开始'}」`:'当前还没有引导状态文件，开启后会新建一份';
+    const ok=await confirmModal('开启「跳过引导」?\n\n开启后：\n'
+      +'· 当前这份立即标记为已完成（'+where+'）\n'
+      +'· 之后保存的账号、以及每次切号还原的快照，都会自动跳过引导\n'
+      +'· 新加的账号也直接进主界面，不再走权限与试听步骤\n\n'
+      +'Typeless 正在运行时会先关闭再启动一次。要恢复引导需手动删除 app-onboarding.json。',{okText:'开启'});
+    if(!ok) return;
+  }
+  setBusy(true);
+  try{
+    toast(enabled?'正在关闭…':'正在开启…');
+    const r=await api('/api/onboarding',{method:'POST',body:JSON.stringify({enabled:!enabled})});
+    if(r.status!=='OK'){
+      toast(r.msg||'设置失败','err'); operationResult(r.msg||'设置失败',true);
+      await loadOnboardingPolicy();
+      return;
+    }
+    renderSkipOnboarding(r.data?.enabled===true);
+    toast(r.msg||'已更新','ok');
+    operationResult(r.msg||'已更新');
+    if(r.data?.restarted) await waitForConnection(15000);
+    await loadAccounts().catch(()=>{}); await detectCurrent().catch(()=>{});
+  }catch(e){
+    toast('设置失败: '+e.message,'err');
+  }finally{ setBusy(false); }
+}
+
 async function resetDevice(){
   if(BUSY) return;
   const ok=await confirmModal('解除设备限制?\n\n将重置设备并重启 Typeless 到登录页。当前账号会被登出。\n只有保存了完整快照且登录凭证仍有效的账号才能切回，否则需要重新登录。',{danger:true,okText:'解除设备限制'});
@@ -723,7 +778,7 @@ async function patchPaywall(){
       toast('已是无弹窗补丁版,无需重复操作');
       return;
     }
-    const ok=await confirmModal('解除升级弹窗?\n\n将修改 app.asar 与 Info.plist 完整性记录(等长字节替换 gn(x)→(0,x),并重新签名 Typeless.app)。\n本次操作会创建绑定当前版本和哈希的事务备份;任一步失败只回滚本次备份并重新验证签名。\nTypeless 会先关闭,打完自动重启。\n注意:Typeless 自动更新会还原补丁,届时需重打。',{danger:true,okText:'解除弹窗提示'});
+    const ok=await confirmModal('解除升级弹窗?\n\n将修改 app.asar 与 Info.plist 完整性记录(等长字节替换 gn(x)→(0,x),并重新签名 Typeless.app)。\n本次操作会创建绑定当前版本和哈希的事务备份;任一步失败只回滚本次备份并重新验证签名。\nTypeless 会先关闭,打完自动重启。\n注意:Typeless 自动更新会还原补丁,届时需重打。',{danger:true,okText:'解除弹窗'});
     if(!ok) return;
     toast('打补丁中…');
     const r=await api('/api/patch-paywall',{method:'POST'});
@@ -1007,6 +1062,7 @@ async function renderDiag(){
 }
 async function bootDetect(){
   await resumeLoginFlow();
+  await loadOnboardingPolicy();
   try{ await loadAccounts(); }catch(e){ toast('账号加载失败: '+e.message,'err'); }
   await detectCurrent(true);
   try{
@@ -1014,7 +1070,7 @@ async function bootDetect(){
     if(r.status!=='OK' || !pw?.exists || !pw.has_backup || pw.patched) return;
     const b=document.getElementById('patchBanner');
     b.className='banner warn'; b.style.display='flex';
-    b.innerHTML='<span>⚠ 去弹窗补丁已被 Typeless 更新还原 — 点「⊘ 解除弹窗提示」可重打</span><span class="x" data-tip="忽略" onclick="this.parentElement.style.display=\'none\'">✕</span>';
+    b.innerHTML='<span>⚠ 去弹窗补丁已被 Typeless 更新还原 — 点「⊘ 解除弹窗」可重打</span><span class="x" data-tip="忽略" onclick="this.parentElement.style.display=\'none\'">✕</span>';
   }catch(e){}
 }
 async function detectCurrent(fromBoot){

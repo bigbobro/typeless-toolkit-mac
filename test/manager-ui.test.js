@@ -13,8 +13,10 @@ function loadUi(request, { realLoad = false } = {}) {
   const elements = new Map();
   const element = (id) => {
     if (!elements.has(id)) elements.set(id, {
-      innerHTML: '', textContent: '', style: {}, dataset: {},
+      innerHTML: '', textContent: '', style: {}, dataset: {}, attributes: {},
       classList: { visible:false, add() { this.visible=true; }, remove() { this.visible=false; }, contains() { return this.visible; } }, addEventListener() {},
+      setAttribute(name, value) { this.attributes[name] = String(value); },
+      getAttribute(name) { return Object.hasOwn(this.attributes, name) ? this.attributes[name] : null; },
     });
     return elements.get(id);
   };
@@ -330,4 +332,58 @@ test('原生操作失败时保留原因并解除按钮锁,不继续等待成功�
     assert.match(element('operationMsg').textContent,/操作失败/);
     assert.equal(vm.runInContext('BUSY',ui),false);
   }
+});
+
+test('跳过引导开关:关闭状态点击要先确认,确认后才写入并点亮按钮',async()=>{
+  const posts=[];
+  const {ui,element}=loadUi((path,options)=>{
+    if(path==='/api/onboarding'&&(!options||options.method!=='POST'))
+      return {status:'OK',data:{exists:true,completed:false,step:'permissions',enabled:false}};
+    if(path==='/api/onboarding'&&options?.method==='POST'){
+      posts.push(options.body);
+      return {status:'OK',data:{enabled:true,completed:true},msg:'已开启：跳过引导'};
+    }
+    return {status:'OK'};
+  });
+  let shownMessage='';
+  ui.confirmModal=async(message)=>{shownMessage=message;return true;};
+  await ui.toggleSkipOnboarding();
+  assert.match(shownMessage,/permissions/,'确认框要说明当前停在哪一步');
+  assert.match(shownMessage,/新加的账号/,'确认框要讲清对以后新增账号的影响');
+  assert.deepEqual(posts,['{"enabled":true}']);
+  assert.equal(element('btnSkipOnboarding').getAttribute('aria-pressed'),'true');
+  assert.match(element('btnSkipOnboarding').textContent,/已跳过引导/);
+  assert.equal(vm.runInContext('BUSY',ui),false);
+});
+
+test('跳过引导开关:已开启时点击是关闭,不必再确认',async()=>{
+  const posts=[];
+  const {ui,element}=loadUi((path,options)=>{
+    if(path==='/api/onboarding'&&options?.method!=='POST')
+      return {status:'OK',data:{exists:true,completed:true,step:'end_page',enabled:true}};
+    if(path==='/api/onboarding'&&options?.method==='POST'){
+      posts.push(options.body);
+      return {status:'OK',data:{enabled:false},msg:'已关闭：跳过引导'};
+    }
+    return {status:'OK'};
+  });
+  let confirmed=false;
+  ui.confirmModal=async()=>{confirmed=true;return true;};
+  await ui.toggleSkipOnboarding();
+  assert.equal(confirmed,false,'关闭不该再弹一次确认');
+  assert.deepEqual(posts,['{"enabled":false}']);
+  assert.equal(element('btnSkipOnboarding').getAttribute('aria-pressed'),'false');
+});
+
+test('跳过引导开关:写入失败时保留原因、不改按钮状态、解除按钮锁',async()=>{
+  const {ui,element}=loadUi((path,options)=>{
+    if(path==='/api/onboarding'&&options?.method!=='POST')
+      return {status:'OK',data:{exists:true,completed:false,step:'permissions',enabled:false}};
+    return {status:'FAIL',msg:'配置写入失败'};
+  });
+  ui.confirmModal=async()=>true;
+  await ui.toggleSkipOnboarding();
+  assert.match(element('operationMsg').textContent,/配置写入失败/);
+  assert.equal(element('btnSkipOnboarding').getAttribute('aria-pressed'),'false','失败不能把开关画成已开启');
+  assert.equal(vm.runInContext('BUSY',ui),false);
 });

@@ -82,8 +82,21 @@ header .sub { color:var(--mut); font-size:13px; margin-top:6px; display:flex; al
 .btn:disabled { opacity:.5; cursor:not-allowed; box-shadow:none; }
 #launchBtn { width:132px; justify-content:center; }
 #launchBtn.connected:disabled { opacity:1; color:var(--grn-d); background:var(--grn-t); border-color:var(--grn-line); }
-.toolbar { display:flex; gap:8px; flex-wrap:wrap; margin:16px 0 20px; align-items:center; }
-.toolbar .sep { width:1px; align-self:stretch; background:var(--line); margin:4px 8px; }
+.toolbar { display:flex; flex-direction:column; gap:10px; margin:16px 0 20px; }
+/* 主操作一行(连接/添加/刷新/同步),次要操作收进下面一行并按用途分组。
+   按钮多了以后单行 flex-wrap 会在任意位置折行,最后一行只剩一个孤零零的按钮。 */
+.toolbar-row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.toolbar-row.secondary-row { gap:18px; }
+.toolbar-group { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.toolbar-group + .toolbar-group { padding-left:18px; border-left:1px solid var(--line); }
+.toolbar-label { font-size:11px; font-weight:600; color:var(--mut); letter-spacing:.04em; text-transform:uppercase; margin-right:2px; white-space:nowrap; }
+/* 开关式按钮:开启后常亮,与一次性动作按钮区分开 */
+.btn.toggle[aria-pressed="true"] { background:var(--grn-t); border-color:var(--grn-line); color:var(--grn-d); font-weight:600; }
+.btn.toggle[aria-pressed="true"]:hover { background:var(--grn-t); border-color:var(--grn); }
+@media (max-width:720px) {
+  .toolbar-group + .toolbar-group { padding-left:0; border-left:none; }
+  .toolbar-label { display:none; }
+}
 
 /* ===== 顶部提示条 / 备份区 ===== */
 .banner { background:var(--grn-t); border:1px solid var(--grn-line); color:var(--grn-d); padding:10px 14px; border-radius:var(--r-lg); font-size:13px; margin-bottom:14px; display:none; line-height:1.5; }
