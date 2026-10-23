@@ -283,6 +283,7 @@ textarea#masterArea:focus, textarea.fld:focus { border-color:var(--grn); box-sha
 .toast.on { opacity:1; transform:translate(-50%,0); }
 .toast.ok::before { background:#34c38f; }
 .toast.err::before { background:#ff6b5e; }
+.toast.warn::before { background:#e0a33e; }
 /* ===== 自定义确认弹窗(替代原生 confirm) ===== */
 .confirm-msg { font-size:13px; line-height:1.7; white-space:pre-line; }
 .confirm-actions { margin-top:16px; padding-top:14px; border-top:1px solid var(--line); display:flex; gap:8px; justify-content:flex-end; }

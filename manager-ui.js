@@ -418,8 +418,12 @@ function render(){
     const used=ok?u.week_word_usage_value:0, lim=u.week_word_usage_limit||8000;
     const p=pct(used,lim); const over=ok&&used>lim;
     const expired=a.login_status==='expired';
+    // 「未连接」是本地条件,不是凭证问题:这时既不能说有效,也不该催用户重新登录。
+    const unavailable=a.login_status==='unavailable';
     const cur=a.user_id===CUR_ID;
-    const texp=expired?'':`<div class="texp ${a.login_status==='valid'?'':'warn'}">${a.login_status==='valid'?'登录凭证有效':'登录状态暂未确认，请刷新重试'}</div>`;
+    const texp=expired?'' : unavailable
+      ? '<div class="texp warn">未连接 Typeless，暂未校验登录（校验需借用客户端）</div>'
+      : `<div class="texp ${a.login_status==='valid'?'':'warn'}">${a.login_status==='valid'?'登录凭证有效':'登录状态暂未确认，请刷新重试'}</div>`;
     const snapTxt = a.has_snapshot ? ('快照已存'+(a.snapshot_mtime?' · '+relTime(a.snapshot_mtime):'')) : '未存快照';
     return `<div class="card ${cur?'on':''} ${expired?'expired':''}${enterCls}"${enterSty} data-account-id="${esc(a.user_id)}">
       <div class="chead">
@@ -636,6 +640,21 @@ async function syncAll(){
 // 切号 = 还原快照重启 Typeless + 紧接着同步该账号词库。
 // 两个 API 分开调:切号是破坏性操作(杀进程、覆盖登录态文件),同步是纯增量网络操作,
 // 同步失败不能让「号其实已经切好了」这个结论被一起否定,所以分别汇报。
+//
+// 切号会重启 Typeless,而词库同步要借官方运行时现算请求校验头(见 lib/typeless-api.js)。
+// 新进程还没起好时同步必然失败,所以先等管理连接就绪;等不到就跳过同步并如实说明,
+// 不把「Typeless 还没起来」报成「同步失败」。
+async function waitForConnection(timeoutMs=12000){
+  const deadline=Date.now()+timeoutMs;
+  for(;;){
+    try{
+      const r=await api('/api/current');
+      if(r.data?.state==='connected') return true;
+    }catch(e){}
+    if(Date.now()>=deadline) return false;
+    await sleep(600);
+  }
+}
 async function switchTo(id){
   if(BUSY) return;
   const a=ACCOUNTS.find(x=>x.user_id===id); if(!a) return;
@@ -649,10 +668,19 @@ async function switchTo(id){
       toast(r.msg||'切换失败','err');
       operationResult(r.msg||'切换失败',true);
       if(r.code==='ACCOUNT_LOGIN_EXPIRED'){ a.login_status='expired'; render(); }
+      // 校验账号要借用客户端签名,连接没起来时先把人引到「连接 Typeless」。
+      if(r.code==='CONNECTION_REQUIRED') setTimeout(()=>document.getElementById('launchBtn')?.focus(),0);
       await loadAccounts(); await detectCurrent();
       return;                       // 号没切成,不去同步一个并没有生效的账号
     }
-    toast('已切换,正在同步词库…');
+    toast('已切换,正在等待 Typeless 就绪并同步词库…');
+    const ready=await waitForConnection();
+    if(!ready){
+      toast('已切换,但 Typeless 尚未就绪,暂未同步词库','warn');
+      operationResult('账号已切换，但 Typeless 尚未就绪，词库未同步。打开 Typeless 后可在账号详情重试同步。',true);
+      await loadAccounts(); await detectCurrent();
+      return;
+    }
     const sync=await api('/api/accounts/'+encodeURIComponent(id)+'/sync',{method:'POST'})
       .catch(e=>({status:'FAIL',msg:e.message||'网络错误'}));
     if(sync.status==='OK'){
@@ -953,7 +981,9 @@ async function renderDiag(){
       diagRow('neutral','登录校验来源','以下为最近一次「全部刷新」的结果；诊断不会重新校验账号。','mut'),
       ...ACCOUNTS.map((account,index)=>{
         const check=account.login_check;
-        const label=account.login_status==='valid'?'登录凭证有效':account.login_status==='expired'?'登录已失效':'登录状态未确认';
+        const label=account.login_status==='valid'?'登录凭证有效'
+          :account.login_status==='expired'?'登录已失效'
+            :account.login_status==='unavailable'?'未连接 Typeless，未校验':'登录状态未确认';
         const detail=check
           ? label+' · HTTP '+(Number.isInteger(check.http_status)?check.http_status:'未取得')
             +' · 业务码 '+(Number.isSafeInteger(check.api_code)?check.api_code:'未返回')

@@ -122,6 +122,42 @@ test('列表区分服务器拒绝的登录凭证和网络异常,不依赖资料�
   }
 });
 
+test('客户端校验被拒(403/20006)不算凭证失效,并给出可操作提示', async () => {
+  const m = manager({
+    _http_status: 403, status: 'FAIL', code: 20006, msg: 'HTTPException',
+    detail: 'This client is not supported. Please use the official Typeless app.',
+  });
+  const list = await m.run('GET', '/api/accounts');
+  const account = list.body.data[0];
+  assert.equal(account.login_status, 'unknown', '服务端拒绝客户端校验不等于登录过期');
+  assert.equal(account.login_check.http_status, 403);
+  assert.equal(account.login_check.api_code, 20006);
+
+  // 切号必须停在检查这一步,不能去杀进程、覆盖登录态。
+  const result = await m.run();
+  assert.equal(result.body.status, 'FAIL');
+  assert.equal(result.body.code, 'LOGIN_CHECK_FAILED');
+  assert.match(result.body.msg, /20006/);
+  assert.doesNotMatch(result.body.msg, /重新登录/);
+  assert.deepEqual(m.calls.map(c => c[0]), ['refresh', 'refresh']);
+});
+
+test('管理连接不可用时切号提示「先连接」,不误报凭证失效,也不动进程', async () => {
+  const unreachable = Object.assign(
+    new Error('需要连接 Typeless 客户端才能校验请求，请先点「⏻ 连接 Typeless」后重试'),
+    { code: 'CONNECTION_REQUIRED' },
+  );
+  const m = manager(null, true, { curlApi: async () => { throw unreachable; } });
+  const list = await m.run('GET', '/api/accounts');
+  assert.equal(list.body.data[0].login_status, 'unavailable');
+  const result = await m.run();
+  assert.equal(result.body.status, 'FAIL');
+  assert.equal(result.body.code, 'CONNECTION_REQUIRED');
+  assert.match(result.body.msg, /连接 Typeless/);
+  assert.doesNotMatch(result.body.msg, /重新登录|凭证已失效/);
+  assert.deepEqual(m.calls.map(c => c[0]), [], '连接不可用时不能动 Typeless 进程');
+});
+
 test('列表保留登录刷新检查的 HTTP 状态、业务码和时间，不包含响应凭证', async () => {
   for (const [response, status, httpStatus, apiCode] of [
     [{ _http_status: 401, code: 402, detail: 'synthetic-sensitive-response' }, 'expired', 401, 402],

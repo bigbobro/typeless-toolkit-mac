@@ -123,17 +123,27 @@ function publicAccount(account, extra = {}) {
 
 async function inspectAccountLogin(account) {
   const started = Date.now();
-  let result;
+  let result, failure = null;
   try {
     result = await curlApi('POST', '/oauth/refresh_access_token', account.token, { app: 'typeless_webapp' });
-  } catch (_) {}
+  } catch (error) { failure = error; }
+  // 「管理连接不可用」是本地条件,不是凭证问题:不能报成登录过期,否则会把
+  // 用户引到重新登录(那一步同样要连接)。区分出来单独提示先连 Typeless。
+  const unreachable = failure?.code === 'CONNECTION_REQUIRED';
   const check = {
-    status: result?.code === 402 ? 'expired'
-      : typeof result?.access_token === 'string' && result.access_token ? 'valid' : 'unknown',
+    status: unreachable ? 'unavailable'
+      : result?.code === 402 ? 'expired'
+        : typeof result?.access_token === 'string' && result.access_token ? 'valid' : 'unknown',
     checked_at: new Date().toISOString(),
     http_status: result?._http_status ?? null,
     api_code: result?.code ?? null,
   };
+  if (unreachable) check.message = failure.message;
+  else if (result?.code === 20006) {
+    // 服务端因客户端校验拒绝:既不是凭证过期,也不能当成网络抖动。
+    check.message = '服务端未接受本次客户端校验（code 20006）。请确认 Typeless 为最新版本，更新后重试；'
+      + '若仍失败，请点「⏻ 连接 Typeless」重连后再试。';
+  }
   diagnostics.record('login_check', { account_id: account.user_id, credential: account.token,
     outcome: check.status, http_status: check.http_status, api_code: check.api_code,
     duration_ms: Date.now() - started });
@@ -148,9 +158,15 @@ async function checkAccountLogin(account) {
 async function switchSavedAccount(id, beforeSwitch = async () => {}) {
   const account = requireAccount(id);
   if (!hasSnapshot(id)) throw new LocalApiError(400, 'SNAPSHOT_INVALID', '登录快照缺失或账号不匹配，请先在 Typeless 登录该号后点「更新登录」');
-  const loginStatus = await checkAccountLogin(account);
-  if (loginStatus === 'expired') throw new LocalApiError(400, 'ACCOUNT_LOGIN_EXPIRED', '该账号登录凭证已失效,本次未切换。请点卡片上的「重新登录」更新原账号,或选择「移除」。');
-  if (loginStatus !== 'valid') throw new LocalApiError(502, 'LOGIN_CHECK_FAILED', '无法验证该账号的登录凭证,请检查网络后重试。本次未切换。');
+  const check = await inspectAccountLogin(account);
+  if (check.status === 'unavailable') {
+    throw new LocalApiError(502, 'CONNECTION_REQUIRED', '需要连接 Typeless 客户端才能校验账号，本次未切换。请点「⏻ 连接 Typeless」后重试。');
+  }
+  if (check.status === 'expired') throw new LocalApiError(400, 'ACCOUNT_LOGIN_EXPIRED', '该账号登录凭证已失效,本次未切换。请点卡片上的「重新登录」更新原账号,或选择「移除」。');
+  if (check.status !== 'valid') {
+    throw new LocalApiError(502, 'LOGIN_CHECK_FAILED',
+      (check.message ? check.message : '无法验证该账号的登录凭证,请检查网络后重试。') + '本次未切换。');
+  }
   await beforeSwitch();
   await killTypeless(); await sleep(1500);
   const previousId = readCurrentLogin()?.user_id;
@@ -302,6 +318,8 @@ function publicLiveStatus(live = {}) {
     usage,
     personal,
     dict_count: Number.isFinite(source.dict_count) ? source.dict_count : null,
+    // 只表示「这次没读到,因为客户端没连上」,不是账号状态。
+    ...(source.connection_required ? { connection_required: true } : {}),
     ...(source._err ? { error: String(source._err).slice(0, 300) } : {}),
   };
 }

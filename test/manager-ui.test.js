@@ -119,6 +119,19 @@ test('失效卡片直接提供重新登录和移除,不显示剩余天数或切�
   assert.doesNotMatch(card, /283|切换到此号/);
 });
 
+test('未连接 Typeless 时卡片说明「未校验」,不催用户重新登录', () => {
+  // 登录校验要借用客户端签名:连接没起来时凭证本身没问题。把卡片画成「失效」
+  // 会把用户引到同样需要连接的「重新登录」里绕圈。
+  const { ui, element } = loadUi(() => ({}));
+  vm.runInContext('ACCOUNTS=[{user_id:"target",nickname:"某账号",login_status:"unavailable",has_snapshot:true,'
+    + 'live:{token_valid:true,connection_required:true,usage:null,dict_count:null}}];', ui);
+  ui.render();
+  const card = element('grid').innerHTML;
+  assert.match(card, /未连接 Typeless，暂未校验登录/);
+  assert.doesNotMatch(card, /登录已失效|登录状态暂未确认/);
+  assert.match(card, /切换到此号/, '未连接不该藏掉切号入口');
+});
+
 test('统计读取被拒绝时显示原因和未知值,不伪装成零用量或未启用', () => {
   const { ui, element } = loadUi(() => ({}));
   const account = { user_id: 'target', login_status: 'valid', live: {

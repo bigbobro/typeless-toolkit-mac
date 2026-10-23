@@ -2,7 +2,7 @@
 
 [![test](https://github.com/bigbobro/typeless-toolkit-mac/actions/workflows/test.yml/badge.svg)](https://github.com/bigbobro/typeless-toolkit-mac/actions/workflows/test.yml)
 
-当前版本：[v2.9.5](https://github.com/bigbobro/typeless-toolkit-mac/releases/tag/macos-v2.9.5)。运行中的工具版本显示在管理器页面标题旁。
+当前版本：[v2.9.6](https://github.com/bigbobro/typeless-toolkit-mac/releases/tag/macos-v2.9.6)。运行中的工具版本显示在管理器页面标题旁。
 
 给 **macOS 上的 Typeless** 用的本机管理器：把多个账号收在一个页面里，切号、对齐词库、处理设备限制、去掉升级/会员弹窗。数据只留在本机，打开浏览器操作，不用注册云端、也不用 `npm install`。
 
@@ -145,7 +145,9 @@ lsof -nP -iTCP:9222 -sTCP:LISTEN
 
 ### 词库怎么对齐
 
-词库操作需要先连接 Typeless。工具用已保存的刷新凭证换取同账号访问令牌，再通过本机官方运行时生成请求校验头；多账号同步无需逐个切换桌面端登录。访问令牌只短暂缓存在内存中，签名密钥不提取、不保存。官方客户端更新若改变内部接口，工具会明确报错；读取失败不会被显示为空词库或零用量。
+词库操作和账号状态校验都需要先连接 Typeless。工具用已保存的刷新凭证换取同账号访问令牌，再通过本机官方运行时为**每个请求**（包括换取令牌的那一次）生成请求校验头；多账号同步与切号无需逐个切换桌面端登录。访问令牌只短暂缓存在内存中，签名密钥不提取、不保存。官方客户端更新若改变内部接口，工具会明确报错；读取失败不会被显示为空词库或零用量。
+
+> 校验头由官方运行时按请求现算、且只能用一次，所以本工具既不复用也不缓存签名。由此带来一个前提：**Typeless 没开着时无法校验账号，也读不到词库与用量**。此时卡片显示「未连接 Typeless，暂未校验登录」，而不是把账号判成失效——重新登录同样依赖这个连接。
 
 同步两步，都是只增：
 

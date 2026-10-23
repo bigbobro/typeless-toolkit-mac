@@ -41,11 +41,12 @@ test('调用官方导出对象时只传 URL 和账号身份,只返回白名单�
   await assert.rejects(headersInRenderer(pathToFileURL(broken).href, 'https://api.typeless.com/user/test', 'a'), /未能生成/);
 });
 
-test('运行时签名不自动重启应用;非官方来源及刷新路径不得调用签名器', async () => {
+test('运行时签名不自动重启应用;非官方来源不得调用签名器,刷新路径必须签名', async () => {
   const sign = createRuntimeSigner({ asarPath: '/not-used', portUp: async () => false, withCDP: () => assert.fail('不应调用') });
   await assert.rejects(sign('https://api.typeless.com/user/test', 'a'), /连接 Typeless/);
   await assert.rejects(sign('https://other.example/user/test', 'a'), /不应调用/);
-  await assert.rejects(sign('https://api.typeless.com/oauth/refresh_access_token', 'a'), /不应调用/);
+  // 2026-10 起刷新接口同样被服务端要求客户端校验,签名器必须放行而不是直接拒绝。
+  await assert.rejects(sign('https://api.typeless.com/oauth/refresh_access_token', 'a'), /连接 Typeless/);
 });
 
 test('安装包变化后重新定位模块,签名每次调用官方运行时', async t => {
