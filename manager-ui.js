@@ -867,7 +867,8 @@ function renderLoginFlow(){
   document.getElementById('flowCancel').disabled=LOGIN_FLOW_PENDING||f.busy;
   document.getElementById('flowReopen').hidden=!f.can_reopen_browser;
   document.getElementById('flowReopen').disabled=LOGIN_FLOW_PENDING;
-  document.getElementById('flowBrowserHelp').hidden=!['waiting_login','login_required'].includes(f.stage);
+  // 独立窗口登录不使用默认浏览器的网页会话，清除站点数据的说明只适用于默认浏览器入口。
+  document.getElementById('flowBrowserHelp').hidden=f.clean_login||!['waiting_login','login_required'].includes(f.stage);
   document.getElementById('flowChanged').textContent=(f.changed_accounts||[]).map(a=>a.email||a.nickname||a.user_id).join('、');
   stopLoginPoll();
   if(!LOGIN_FLOW_PENDING&&(f.auto_check||f.busy)&&document.getElementById('addMask').classList.contains('on')){

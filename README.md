@@ -2,7 +2,7 @@
 
 [![test](https://github.com/bigbobro/typeless-toolkit-mac/actions/workflows/test.yml/badge.svg)](https://github.com/bigbobro/typeless-toolkit-mac/actions/workflows/test.yml)
 
-当前版本：[v2.9.7](https://github.com/bigbobro/typeless-toolkit-mac/releases/tag/macos-v2.9.7)。运行中的工具版本显示在管理器页面标题旁。
+当前版本：[v2.9.8](https://github.com/bigbobro/typeless-toolkit-mac/releases/tag/macos-v2.9.8)。运行中的工具版本显示在管理器页面标题旁。
 
 给 **macOS 上的 Typeless** 用的本机管理器：把多个账号收在一个页面里，切号、对齐词库、处理设备限制、去掉升级/会员弹窗。数据只留在本机，打开浏览器操作，不用注册云端、也不用 `npm install`。
 
@@ -81,7 +81,7 @@ lsof -nP -iTCP:9222 -sTCP:LISTEN
 ### 第一次与添加账号
 
 1. 启动管理器，点「添加新账号」。向导会连接 Typeless 并检查当前状态。
-2. 按页面的下一步操作，在官方登录页完成登录并允许返回 Typeless。若当前会话还未妥善保存，会先在同一流程里引导保存；若已经登录待添加的账号，可以直接进入确认。
+2. 按页面的下一步操作，在弹出的独立登录窗口完成登录，完成后会自动登入 Typeless。若当前会话还未妥善保存，会先在同一流程里引导保存；若已经登录待添加的账号，可以直接进入确认。
 3. 核对邮箱，确认保存。工具会保存凭证和快照，校验结果，并为新账号导入主词库。导入失败会单独提示重试方式。
 4. 页面显示完成后，再添加下一个账号；需要汇总个人词时使用「全部同步」。
 
@@ -89,7 +89,9 @@ lsof -nP -iTCP:9222 -sTCP:LISTEN
 
 刷新页面可以恢复同一个流程，收起后从顶部「继续登录流程」返回。管理器重启或超过 30 分钟后需要重新检查；结束前会阻止切号、设备重置等其他写操作，后台轮动也会等待。点「结束本次流程」后恢复通常操作，已保存的账号和当前登录不会删除或退出。
 
-**不要通过网页或 Typeless 的「退出登录 / Sign out」换号。** 两处退出操作都会请求服务器撤销对应会话的凭证；恢复本地快照不能撤销服务端的注销。工具通过官方入口打开默认浏览器，不自动隔离网页会话。网页显示错误账号时，展开向导内的说明，仅清除该浏览器的 `typeless.com` 站点数据，再重新打开官方登录页。只有 Typeless 明确提示设备限制时，才使用「解除设备限制」。
+**不要通过网页或 Typeless 的「退出登录 / Sign out」换号。** 两处退出操作都会请求服务器撤销对应会话的凭证，已保存的同一账号也会随之失效（402）；恢复本地快照不能撤销服务端的注销。只有 Typeless 明确提示设备限制时，才使用「解除设备限制」。
+
+**独立登录窗口。** 「打开官方登录页」会用本机的 Chrome（或 Edge、Brave、Chromium）以临时空白资料打开官方登录页，不沾默认浏览器里已有的网页登录，所以换号不需要在网页上退出。登录完成后工具截取官方回调，换取凭证并通过 Typeless 自身的登录接口登入，再进入邮箱确认；临时资料用完即删，不记录链接、授权码或凭证。本机没有这类浏览器，或在配置中设 `"clean_login": false` 时，退回 Typeless 自带的默认浏览器入口：网页显示错误账号时，展开向导内的说明，仅清除该浏览器的 `typeless.com` 站点数据，再重新打开官方登录页。
 
 ### 切号
 
@@ -237,7 +239,7 @@ node typeless-dict-sync.js
 }
 ```
 
-常用键：`typeless_app`、`cdp_port`（默认 9222）、`manager_port`（默认 7788）、`api_base`、`paywall`（自动探测失败再手工填）、`skip_onboarding`（跳过初始引导，由工具栏开关写入）。
+常用键：`typeless_app`、`cdp_port`（默认 9222）、`manager_port`（默认 7788）、`api_base`、`paywall`（自动探测失败再手工填）、`skip_onboarding`（跳过初始引导，由工具栏开关写入）、`clean_login`（默认 `true`，添加和恢复账号时使用独立登录窗口）。
 
 想知道工具实际探测到了哪个 `app.asar`、哪个数据目录，点工具栏的 **◇ 诊断** —— 它是只读的，会把路径、端口、账号数、数据目录一次列出来。
 
@@ -321,6 +323,7 @@ Typeless 首次使用（以及每加一个新账号）会走一段 20 多步的�
 | `lib/rotation-notifier.js` | macOS 原生确认框与结果通知，提示超时和取消时释放子进程 |
 | `lib/runtime-backup.js` | 运行数据备份 / 恢复事务 |
 | `lib/login-flow.js` | 添加与恢复流程、步骤条件、会话确认、重试和中断恢复 |
+| `lib/clean-login.js` | 独立登录窗口：临时浏览器资料、截取官方回调、换取凭证并交给 Typeless |
 | `lib/diagnostic-log.js` | 登录排查日志、匿名标识、容量限制和安全导出 |
 | `lib/paywall-patch.js` | 去弹窗补丁（asar 解析、等长替换、重签名） |
 | `lib/private-fs.js` | 私有目录与原子写入 |

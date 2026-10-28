@@ -217,8 +217,8 @@ test('网络或异常刷新响应不能继续切号', async () => {
 });
 
 test('应用登录校验读取主进程身份和访问令牌,不会把其他账号或空登录态算成功', async () => {
-  const ipcCalls = [];
-  let user = null, token = null;
+  const ipcCalls = [], logs = [];
+  let user = null, token = null, refreshFailures = 0;
   class Socket {
     constructor() { queueMicrotask(() => this.onopen()); }
     close() {}
@@ -228,14 +228,24 @@ test('应用登录校验读取主进程身份和访问令牌,不会把其他账�
         this.onmessage({ data: JSON.stringify({ id: request.id, result: { identifier: 'script' } }) });
         return;
       }
-      const value = await vm.runInNewContext(request.params.expression, {
-        window: { ipcRenderer: { invoke: async (channel) => {
-          ipcCalls.push(channel);
-          if (channel === 'auth:get-current') return user;
-          if (channel === 'auth:get-access-token') return token;
-          assert.fail('登录校验不得调用其他 IPC');
-        } } },
-      });
+      let value;
+      try {
+        value = await vm.runInNewContext(request.params.expression, {
+          window: { ipcRenderer: { invoke: async (channel) => {
+            ipcCalls.push(channel);
+            if (channel === 'auth:get-current') return user;
+            if (channel === 'auth:get-access-token') {
+              if (refreshFailures-- > 0) throw new Error('Failed to refresh access token');
+              return token;
+            }
+            assert.fail('登录校验不得调用其他 IPC');
+          } } },
+        });
+      } catch (error) {
+        const exception = { description: 'Error: ' + error.message };
+        this.onmessage({ data: JSON.stringify({ id: request.id, result: { exceptionDetails: { exception } } }) });
+        return;
+      }
       this.onmessage({ data: JSON.stringify({ id: request.id, result: { result: { value } } }) });
     }
   }
@@ -249,7 +259,7 @@ test('应用登录校验读取主进程身份和访问令牌,不会把其他账�
     }] }),
   });
   const cdp = mod.exports.createCdp({
-    cdpPort: 9333, asarPath: '/test/app.asar', sleep: async () => {},
+    cdpPort: 9333, asarPath: '/test/app.asar', sleep: async () => {}, log: message => logs.push(message),
     apiBase: 'https://api.typeless.com', curlApi: async () => ({ data: {} }),
     decodeJwtPayload: common.decodeJwtPayload, accountMetaFromUserInfo: common.accountMetaFromUserInfo,
   });
@@ -261,6 +271,14 @@ test('应用登录校验读取主进程身份和访问令牌,不会把其他账�
   token = 'access';
   await assert.doesNotReject(cdp.verifyCurrentLogin('target'));
   assert.equal(ipcCalls.length, 8);
+  // 官方刷新请求失败(非凭证失效)时抛错;启动后首个刷新可能被拒,重试后成功。
+  refreshFailures = 1;
+  await assert.doesNotReject(cdp.verifyCurrentLogin('target'));
+  assert.equal(logs.length, 1);
+  refreshFailures = 3;
+  await assert.rejects(cdp.verifyCurrentLogin('target'), /Failed to refresh access token/);
+  assert.equal(logs.length, 3, '最多尝试 3 次');
+  refreshFailures = 0;
   user = { user_id: 'target', refresh_token: 'new-refresh' };
   const captured = await cdp.captureTokenCDP();
   assert.equal(captured.token, 'new-refresh', '重新添加必须保存主进程的刷新凭证');

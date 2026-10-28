@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-function fixture({ opened = true } = {}) {
+function fixture({ supported = true } = {}) {
   let current = { user_id: 'a', refresh_token: 'synthetic-refresh-a' };
   const calls = [];
   class Socket {
@@ -20,7 +20,11 @@ function fixture({ opened = true } = {}) {
           window: { ipcRenderer: { invoke: async (channel, provider) => {
             calls.push([channel, provider]);
             if (channel === 'auth:get-current') return current;
-            if (channel === 'auth:start-app-login') return opened;
+            // 官方处理器打开浏览器后不返回值;旧客户端没有该处理器时 invoke 抛错。
+            if (channel === 'auth:start-app-login') {
+              if (!supported) throw Error('No handler registered');
+              return undefined;
+            }
             throw Error('不得注销当前账号或调用其他 IPC: ' + channel);
           } } },
         });
@@ -76,7 +80,7 @@ test('未登录也能使用官方入口，客户端不支持时明确失败', as
   const f = fixture();
   f.setCurrent(null);
   await f.cdp.startAppLogin(current => assert.equal(current, null));
-  const unsupported = fixture({ opened: false });
+  const unsupported = fixture({ supported: false });
   await assert.rejects(unsupported.cdp.startAppLogin(() => {}), /浏览器登录/);
 });
 

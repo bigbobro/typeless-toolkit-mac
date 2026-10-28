@@ -247,3 +247,19 @@ test('保护当前账号保存后会话变化，重试仍保留原来的恢复�
   assert.equal(next.target_id, 'a');
   assert.equal(next.stage, 'protect_current');
 });
+
+test('独立窗口登录:等待提示说明不用退出网页,后台失败时显示原因,结束流程关闭窗口', async () => {
+  let issue = null, closed = 0;
+  const f = fixture({
+    openBrowser: async check => { check({ user_id: 'b', refresh_token: 'b-valid' }); return { mode: 'clean' }; },
+    browserIssue: () => issue, closeBrowser: () => { closed++; },
+  });
+  await f.flow.start('a');
+  const waiting = await f.act('open_browser');
+  assert.equal(waiting.stage, 'waiting_login');
+  assert.match(waiting.message, /独立的登录窗口.*「a@example\.invalid」.*不要在网页上点退出/);
+  issue = '登录窗口已关闭';
+  assert.equal(f.flow.view().message, '登录窗口已关闭');
+  await f.act('cancel');
+  assert.equal(closed, 1);
+});
