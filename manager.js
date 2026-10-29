@@ -13,7 +13,6 @@ const path = require('path');
 const C = require('./lib/common');
 const { createDiagnosticLog } = require('./lib/diagnostic-log');
 const { createLoginFlow, createLoginFlowStore } = require('./lib/login-flow');
-const { createCleanLogin, findBrowser } = require('./lib/clean-login');
 const { createAccountRotation, createRotationStore } = require('./lib/account-rotation');
 const { createRotationNotifier } = require('./lib/rotation-notifier');
 const { makeRotationIssue, issueForError } = require('./lib/rotation-issues');
@@ -32,7 +31,6 @@ const {
   killTypeless, launchTypeless, resetDevice,
   readMaster, writeMaster,
   curlApi, assertApiOk, typelessConnectionStatus, ensureApp, captureTokenCDP, readAppSession, startAppLogin,
-  appLogin, exchangeAppLoginCode,
   liveStatus, syncAccount, readAccountUsage, readActiveAccountId,
   paywallStatus, patchPaywall,
   getTypelessVersion, versionDriftStatus, writeVersionState,
@@ -350,23 +348,11 @@ function publicCapture(capture) {
   };
 }
 
-// 添加账号与重新登录共用:优先在独立窗口登录,本机不可用时退回 Typeless 的默认浏览器入口。
-const cleanLogin = createCleanLogin({
-  readSession: readAppSession, exchange: exchangeAppLoginCode, appLogin, record: diagnostics.record, sleep,
-  browser: () => config.clean_login === false ? null : findBrowser(),
-});
-async function openLoginPage(checkSaved, options) {
-  if (await cleanLogin.start(checkSaved, options)) return { mode: 'clean' };
-  await startAppLogin(checkSaved);
-  return { mode: 'default' };
-}
-
 function getLoginFlow() {
   if (!loginFlow) loginFlow = createLoginFlow({
     store: createLoginFlowStore(path.join(C.ROOT, 'login-flow.json')),
     readAccounts, hasSnapshot, connect: ensureApp, readSession: readAppSession,
-    openBrowser: openLoginPage, checkLogin: inspectAccountLogin,
-    browserIssue: () => cleanLogin.issue(), closeBrowser: () => cleanLogin.close(),
+    openBrowser: startAppLogin, checkLogin: inspectAccountLogin,
     capture: async () => ({ ...await captureTokenCDP(false), snapshot: readLoginFiles() }),
     backupCurrent: backupCurrentLogin,
     record: diagnostics.record, bindLog: diagnostics.attachFlow,

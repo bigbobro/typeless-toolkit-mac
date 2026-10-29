@@ -112,8 +112,6 @@ test('凭证、签名和正文只经内存管道传输，特殊字符原样到�
   assert.deepEqual(f.filesWritten, [], '正文不能短暂落盘后再删除');
   await f.api('GET', '/user/get_user_info', 'synthetic');
   assert.equal(f.requests.length, 2, '正文中的换行不能注入额外 curl 选项');
-  const exchange = await f.request('POST', '/oauth/exchange_app_login_code', null, { code: 'synthetic-code' });
-  assert.equal(exchange.data.authorization, undefined, '换取授权码时还没有凭证，不能发送 Bearer null');
   assert.deepEqual(fs.readdirSync(f.temp), []);
 });
 

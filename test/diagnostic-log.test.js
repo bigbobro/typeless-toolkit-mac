@@ -93,13 +93,3 @@ test('跨请求流程标识可关联，状态原因按枚举过滤，不从消�
   assert.ok(events.filter(e => e.event === 'operation_finished').every(e => e.flow_id === 'abcdabcdabcdabcd'));
   assert.doesNotMatch(JSON.stringify(events), /private|secret|target_id/);
 });
-
-test('独立窗口登录只记录白名单阶段，不记录链接或授权码', t => {
-  const { log } = fixture(t);
-  log.record('clean_login', { step: 'exchanged', http_status: 200, url: 'typeless://auth?code=secret-code', code: 'secret-code' });
-  log.record('clean_login', { step: 'secret-step' });
-  const events = log.exportLog().events.filter(e => e.event === 'clean_login');
-  assert.equal(events[0].step, 'exchanged'); assert.equal(events[0].http_status, 200);
-  assert.equal(events[1].step, undefined);
-  assert.doesNotMatch(JSON.stringify(events), /secret/);
-});
