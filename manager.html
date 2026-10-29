@@ -62,7 +62,7 @@
         <span class="toolbar-label">词库</span>
         <button class="btn small" id="btnSyncAll" data-tip="各账号词库互相补齐，并汇总进主词库（只动词库，不切换账号）" onclick="syncAll()">⇄ 全部同步</button>
         <button class="btn small" data-tip="编辑作为同步基准的主词库（一行一个词）" onclick="openMaster()">✎ 主词库编辑</button>
-        <button class="btn small" id="btnExportDictionary" data-tip="将已保存的主词库下载为单列 CSV，一行一个词" onclick="exportDictionary()">↓ 导出词库</button>
+        <button class="btn small" id="btnExportDictionary" data-tip="选择 CSV 或 TXT 导出已保存的主词库，一行一个词条" onclick="openModal('exportDictionaryMask')">↓ 导出词库</button>
       </div>
       <div class="toolbar-group">
         <span class="toolbar-label">客户端</span>
@@ -147,6 +147,20 @@
         <button class="btn small" data-tip="登录此账号后，一起更新登录凭证和快照" onclick="addAccount(curDetail.user_id)">更新登录</button>
         <span class="spacer"></span>
         <button class="btn small danger" data-tr data-tip="仅从管理器移除该账号，不影响 Typeless 本身" onclick="rmAccount()">移除账号</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 词库导出 -->
+<div class="mask" id="exportDictionaryMask" onclick="if(event.target===this)closeModal('exportDictionaryMask')">
+  <div class="modal" style="width:min(420px,94vw)" role="dialog" aria-modal="true" aria-labelledby="exportDictionaryTitle">
+    <div class="hd"><h3 id="exportDictionaryTitle">导出词库</h3><button class="btn small" aria-label="关闭导出选项" onclick="closeModal('exportDictionaryMask')">✕</button></div>
+    <div class="bd">
+      <div class="confirm-msg">选择文件格式，每行一个词条，无表头。导出已保存的主词库。</div>
+      <div class="confirm-actions">
+        <button class="btn small" onclick="exportDictionary('csv')">导出 CSV</button>
+        <button class="btn small" onclick="exportDictionary('txt')">导出 TXT</button>
       </div>
     </div>
   </div>

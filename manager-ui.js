@@ -942,21 +942,25 @@ function updateQuotaBanner(){
     +'<span class="x" data-tip="本次会话不再提示" onclick="QUOTA_DISMISSED=true;updateQuotaBanner()">✕</span></span>';
 }
 
-async function exportDictionary(){
+async function exportDictionary(format='csv'){
   const btn=document.getElementById('btnExportDictionary');
   if(btn.disabled) return;
   btn.disabled=true;
+  closeModal('exportDictionaryMask');
   try{
     const r=await api('/api/master');
     if(r.status!=='OK') throw new Error(r.msg||'主词库读取失败');
     if(!Array.isArray(r.data)) throw new Error('词库数据格式异常');
     if(!r.data.length){ toast('主词库为空，没有可导出的词条'); return; }
-    // 每个词始终作为一个 CSV 字段;UTF-8 BOM 便于表格软件识别中文。
-    const csv='\uFEFF'+r.data.map(term=>'"'+term.replace(/"/g,'""')+'"').join('\r\n')+'\r\n';
-    const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
+    // TXT 原样逐行输出;CSV 转义字段并带 BOM,便于表格软件识别中文。
+    const content=format==='txt'
+      ? r.data.join('\n')+'\n'
+      : '\uFEFF'+r.data.map(term=>'"'+term.replace(/"/g,'""')+'"').join('\r\n')+'\r\n';
+    const type=format==='txt'?'text/plain;charset=utf-8':'text/csv;charset=utf-8';
+    const url=URL.createObjectURL(new Blob([content],{type}));
     const a=document.createElement('a');
     try{
-      a.href=url; a.download='Typeless词库.csv'; document.body.appendChild(a); a.click();
+      a.href=url; a.download='Typeless词库.'+format; document.body.appendChild(a); a.click();
     }finally{
       a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1000);
     }

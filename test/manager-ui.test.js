@@ -84,20 +84,45 @@ test('导出已保存主词库为无表头单列 CSV,保留中文、逗号、引
 });
 
 test('主词库为空或读取失败时不下载误导性文件,并恢复导出按钮', async () => {
-  for (const reply of [
-    () => ({ status: 'OK', data: [] }),
-    () => ({ status: 'FAIL', msg: '读取失败' }),
-    () => { throw Error('断开'); },
-  ]) {
-    const { ui, element } = loadUi(reply);
-    const { downloads } = captureDownloads(ui);
-    const messages = [];
-    ui.toast = message => messages.push(message);
-    await ui.exportDictionary();
-    assert.equal(downloads.length, 0);
-    assert.match(messages.join(' '), /主词库为空|导出失败/);
-    assert.equal(element('btnExportDictionary').disabled, false);
+  for (const format of ['csv', 'txt']) {
+    for (const reply of [
+      () => ({ status: 'OK', data: [] }),
+      () => ({ status: 'FAIL', msg: '读取失败' }),
+      () => { throw Error('断开'); },
+    ]) {
+      const { ui, element } = loadUi(reply);
+      const { downloads } = captureDownloads(ui);
+      const messages = [];
+      ui.toast = message => messages.push(message);
+      await ui.exportDictionary(format);
+      assert.equal(downloads.length, 0);
+      assert.match(messages.join(' '), /主词库为空|导出失败/);
+      assert.equal(element('btnExportDictionary').disabled, false);
+    }
   }
+});
+
+test('导出入口先选择格式，TXT 下载无表头、无 BOM 的逐行原文', async () => {
+  const requests = [];
+  const { ui, element } = loadUi(url => {
+    requests.push(url);
+    return { status: 'OK', data: ['中文', 'hello,world', 'say "hi"', '00123'] };
+  });
+  const { blobs, downloads, revoked } = captureDownloads(ui);
+  const html = fs.readFileSync(path.join(__dirname, '..', 'manager.html'), 'utf8');
+  const entry = html.match(/<button[^>]*id="btnExportDictionary"[^>]*onclick="([^"]+)"/)[1];
+  vm.runInContext(entry, ui);
+  assert.equal(element('exportDictionaryMask').classList.visible, true);
+  assert.deepEqual(requests, [], '选择格式前不请求词库或下载文件');
+  const txtAction = html.match(/onclick="([^"]+)"[^>]*>导出 TXT<\/button>/)[1];
+  await vm.runInContext(txtAction, ui);
+  assert.equal(element('exportDictionaryMask').classList.visible, false);
+  assert.deepEqual(requests, ['/api/master']);
+  assert.deepEqual(downloads, [{ href: 'blob:test-download', filename: 'Typeless词库.txt' }]);
+  assert.equal(blobs[0].type, 'text/plain;charset=utf-8');
+  assert.equal(Buffer.from(await blobs[0].arrayBuffer()).toString('utf8'), '中文\nhello,world\nsay "hi"\n00123\n');
+  assert.deepEqual(revoked, ['blob:test-download']);
+  assert.equal(element('btnExportDictionary').disabled, false);
 });
 
 test('全部同步的请求失败显示错误,不伪装成没有账号,并解除操作锁', async () => {
